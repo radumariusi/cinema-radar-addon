@@ -18,9 +18,7 @@ const manifest = {
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 
-// Funcția care aduce filmele
 async function fetchMovies(apiKey) {
-    const metas = [];
     try {
         const moviesRes = await fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=ro-RO&page=1`);
         const moviesData = await moviesRes.json();
@@ -76,15 +74,12 @@ builder.defineCatalogHandler(async (args) => {
     return { metas: [] };
 });
 
-// Pagina de configurare
+// FIXUL AICI: Montăm routerul SDK-ului direct, pentru a nu bloca cererile de securitate ale Stremio
+app.use(getRouter(builder.getInterface()));
+
+// Pagina web de configurare
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
-});
-
-// Logica Addon-ului
-const addonRouter = getRouter(builder.getInterface());
-app.use((req, res, next) => {
-    addonRouter(req, res, next);
 });
 
 const port = process.env.PORT || 8000;
