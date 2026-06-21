@@ -15,33 +15,45 @@ const manifest = {
     id: "ro.radar.cinemadates",
     version: "1.0.0",
     name: "Cinema Dates Radar",
-    description: "Filme cinema & date lansare VOD/Fizic/TV. Sortate din viitor spre trecut.",
+    description: "Hollywood/EU Filme VOD. Estimări și date oficiale.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & Lansări VOD" }],
     idPrefixes: ["tt"]
 };
 
+// Funcție care transformă o dată în formatul "Late August", "Early Sept" etc.
+function getEstimateString(dateObj) {
+    const day = dateObj.getDate();
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const month = monthNames[dateObj.getMonth()];
+    
+    let period = "Late";
+    if (day <= 10) period = "Early";
+    else if (day <= 20) period = "Mid";
+    
+    return `${period} ${month}`;
+}
+
 async function fetchMovies(apiKey) {
     try {
-        // 1. Tragem 3 pagini (60 de filme) ca să avem de unde tăia indienii
-        const [page1Res, page2Res, page3Res] = await Promise.all([
-            fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=1`),
-            fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=2`),
-            fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=3`)
-        ]);
+        // 1. Tragem 5 pagini (100 de filme) pentru a avea balta plină înainte de filtrare
+        const pagePromises = [];
+        for (let i = 1; i <= 5; i++) {
+            pagePromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
+        }
         
-        const p1 = await page1Res.json();
-        const p2 = await page2Res.json();
-        const p3 = await page3Res.json();
-        
-        let allMovies = (p1.results || []).concat(p2.results || []).concat(p3.results || []);
+        const pagesData = await Promise.all(pagePromises);
+        let allMovies = [];
+        pagesData.forEach(p => {
+            if (p.results) allMovies = allMovies.concat(p.results);
+        });
 
-        // 2. FILTRARE BOLLYWOOD (și alte limbi indiene majore)
-        const indianLangs = ['hi', 'te', 'ta', 'ml', 'kn', 'bn'];
-        let cleanMovies = allMovies.filter(movie => !indianLangs.includes(movie.original_language));
+        // 2. LISTA ALBĂ (Doar Hollywood și Mainstream Europa)
+        const allowedLangs = ['en', 'fr', 'de', 'it', 'es', 'nl', 'sv', 'da', 'no', 'fi'];
+        let cleanMovies = allMovies.filter(movie => allowedLangs.includes(movie.original_language));
 
-        // 3. Oprim primele 30 de filme CURATE
+        // 3. Tăiem la primele 30 cele mai populare filme "curate"
         cleanMovies = cleanMovies.slice(0, 30);
         const today = new Date();
 
@@ -57,7 +69,6 @@ async function fetchMovies(apiKey) {
                 if (detailData.release_dates && detailData.release_dates.results) {
                     for (const r of detailData.release_dates.results) {
                         for (const release of r.release_dates) {
-                            // Căutăm doar 4 (Digital), 5 (Fizic), 6 (TV)
                             if (release.type === 4 || release.type === 5 || release.type === 6) {
                                 const releaseDate = new Date(release.release_date);
                                 if (!isNaN(releaseDate.getTime())) {
@@ -72,25 +83,35 @@ async function fetchMovies(apiKey) {
                     }
                 }
 
-                let chosenDateStr = "Nespecificat";
-                let typeLabel = "Cinema";
-                let chosenDateObj = null;
+                let chosenDateStr = "";
+                let typeLabel = "";
+                let sortDateObj = null;
+                let isEstimated = false;
 
                 if (validDates.length > 0) {
-                    // Alege data CEA MAI APROPIATĂ de prezent (viitor sau trecut)
+                    // Avem dată oficială
                     validDates.sort((a, b) => Math.abs(a.date - today) - Math.abs(b.date - today));
-                    
-                    chosenDateObj = validDates[0].date;
+                    sortDateObj = validDates[0].date;
                     chosenDateStr = validDates[0].string;
                     
                     if (validDates[0].type === 4) typeLabel = "VOD";
                     else if (validDates[0].type === 5) typeLabel = "BluRay";
                     else if (validDates[0].type === 6) typeLabel = "TV";
+                } else {
+                    // Nu avem dată oficială -> Estimăm 45 de zile
+                    isEstimated = true;
+                    typeLabel = "EST";
+                    
+                    let cinemaDate = new Date(movie.release_date);
+                    if (isNaN(cinemaDate.getTime())) cinemaDate = today;
+                    
+                    // Adunăm 45 de zile (în milisecunde)
+                    sortDateObj = new Date(cinemaDate.getTime() + (45 * 24 * 60 * 60 * 1000));
+                    chosenDateStr = getEstimateString(sortDateObj);
                 }
 
-                const displayTitle = chosenDateStr !== "Nespecificat" ? `[${typeLabel}: ${chosenDateStr}] ${movie.title}` : `[Cinema] ${movie.title}`;
+                const displayTitle = `[${typeLabel}: ${chosenDateStr}] ${movie.title}`;
 
-                // Returnăm un obiect complex ca să putem face sortarea la final
                 return {
                     meta: {
                         id: imdbId,
@@ -99,35 +120,30 @@ async function fetchMovies(apiKey) {
                         poster: `https://image.tmdb.org/t/p/w500${movie.poster_path}`,
                         description: `Type: ${typeLabel}\nDate: ${chosenDateStr}\n\n${movie.overview}`
                     },
-                    sortDate: chosenDateObj
+                    sortDate: sortDateObj,
+                    isEstimated: isEstimated
                 };
             } catch (err) { return null; }
         });
 
-        // Așteptăm să se proceseze toate cele 30 de filme
         let processedMovies = (await Promise.all(promises)).filter(m => m !== null);
 
-        // 4. SORTARE FINALĂ: Viitor -> Trecut -> Nespecificat
+        // 4. SORTAREA FINALĂ
         processedMovies.sort((a, b) => {
-            if (a.sortDate && b.sortDate) {
-                // Descrescător: Dacă B e mai mare (mai în viitor), B trece în față
-                return b.sortDate.getTime() - a.sortDate.getTime();
-            } else if (a.sortDate && !b.sortDate) {
-                return -1; // A are dată, B nu. B se duce la coadă.
-            } else if (!a.sortDate && b.sortDate) {
-                return 1;  // B are dată, A nu. A se duce la coadă.
-            } else {
-                return 0;  // Ambele sunt Nespecificate
-            }
+            // Regula 1: Cele estimate la începutul listei
+            if (a.isEstimated && !b.isEstimated) return -1;
+            if (!a.isEstimated && b.isEstimated) return 1;
+
+            // Regula 2: Mai departe în viitor înseamnă mai sus în listă (descrescător)
+            return b.sortDate.getTime() - a.sortDate.getTime();
         });
 
-        // Extragem doar bucata "meta" de care are nevoie Stremio
         return processedMovies.map(item => item.meta);
 
     } catch (error) { return []; }
 }
 
-// RUTARE WEB ȘI MANIFEST
+// RUTARE WEB
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
 });
@@ -136,7 +152,7 @@ app.get("/:apiKey/manifest.json", (req, res) => {
     res.json(manifest);
 });
 
-// RUTARE CATALOG STREMIO
+// RUTARE CATALOG
 async function handleCatalog(req, res) {
     const apiKey = req.params.apiKey;
     const type = req.params.type;
