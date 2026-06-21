@@ -3,46 +3,69 @@
 <head>
     <title>Configurare Cinema Radar</title>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
-        body { font-family: Arial, sans-serif; background: #121212; color: white; text-align: center; padding: 50px; }
-        .container { max-width: 500px; margin: 0 auto; background: #1e1e1e; padding: 30px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
-        input { width: 90%; padding: 12px; margin: 20px 0; border-radius: 5px; border: 1px solid #333; background: #2a2a2a; color: white; font-size: 14px; }
-        button { background: #8a5aed; color: white; border: none; padding: 15px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
-        button:hover { background: #7141cc; }
-        h2 { margin-top: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f1a; color: white; text-align: center; padding: 20px; }
+        .container { max-width: 600px; margin: 50px auto; background: #1a1a2e; padding: 40px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.7); border: 1px solid #303050; }
+        h2 { color: #a277ff; margin-bottom: 10px; }
+        p { color: #b0b0c0; font-size: 14px; }
+        input { width: 100%; padding: 12px; margin: 20px 0; border-radius: 8px; border: 1px solid #333; background: #0f0f1a; color: white; font-size: 16px; box-sizing: border-box; }
+        .button-group { display: flex; gap: 10px; flex-direction: column; }
+        button { background: #6200ee; color: white; border: none; padding: 15px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #3700b3; }
+        #installBtn { background: #00c853; }
+        #installBtn:hover { background: #009624; }
+        #resultArea { margin-top: 30px; display: none; background: #0f0f1a; padding: 20px; border-radius: 8px; border: 1px dashed #6200ee; }
+        #manifestUrl { word-break: break-all; font-family: monospace; color: #00e5ff; font-size: 13px; display: block; margin-bottom: 15px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h2>Setări Cinema & VOD Radar</h2>
-        <p>Introdu cheia ta TMDB API (v3 auth) pentru a activa catalogul:</p>
+        <h2>Cinema & VOD Radar</h2>
+        <p>Introdu cheia API TMDB pentru a genera link-ul de instalare:</p>
         
-        <input type="text" id="tmdbKey" placeholder="Aici pui cheia TMDB...">
+        <input type="text" id="tmdbKey" placeholder="Lipește aici cheia TMDB (ex: 3a2b...)">
         
-        <button onclick="installAddon()">Instalează în Stremio</button>
+        <div class="button-group">
+            <button onclick="generateLink()">Generează Link</button>
+        </div>
+
+        <div id="resultArea">
+            <p style="color: #a277ff; font-weight: bold;">Link-ul tău HTTPS:</p>
+            <span id="manifestUrl"></span>
+            <div style="display: flex; gap: 10px;">
+                <button onclick="copyLink()" style="flex: 1; background: #444;">Copiază Link</button>
+                <button id="installBtn" onclick="installStremio()" style="flex: 1;">Instalează în Stremio</button>
+            </div>
+        </div>
     </div>
 
     <script>
-        function installAddon() {
-            // Luăm cheia scrisă de tine în căsuță
+        function generateLink() {
             const key = document.getElementById('tmdbKey').value.trim();
-            
-            if (!key) {
-                alert("Te rog să introduci cheia TMDB mai întâi!");
-                return;
-            }
+            if (!key) { alert("Introdu cheia TMDB!"); return; }
 
-            // Împachetăm cheia pentru Stremio
-            const config = { tmdb: key };
-            const configStr = JSON.stringify(config);
-            
-            // Aflăm adresa pe care rulează pagina (ex: nume.koyeb.app)
             const host = window.location.host;
+            const protocol = window.location.protocol;
             
-            // Creăm link-ul magic de instalare pentru Stremio
-            const stremioUrl = "stremio://" + host + "/" + encodeURIComponent(configStr) + "/manifest.json";
+            // Formatul pentru configurare în Stremio SDK: /{"tmdb":"cheie"}/manifest.json
+            const config = encodeURIComponent(JSON.stringify({ tmdb: key }));
+            const finalUrl = protocol + "//" + host + "/" + config + "/manifest.json";
             
-            // Trimitem browserul să deschidă Stremio
+            document.getElementById('manifestUrl').innerText = finalUrl;
+            document.getElementById('resultArea').style.display = 'block';
+        }
+
+        function copyLink() {
+            const url = document.getElementById('manifestUrl').innerText;
+            navigator.clipboard.writeText(url).then(() => {
+                alert("Link-ul a fost copiat în clipboard!");
+            });
+        }
+
+        function installStremio() {
+            const url = document.getElementById('manifestUrl').innerText;
+            const stremioUrl = url.replace(/^https?:\/\//, 'stremio://');
             window.location.href = stremioUrl;
         }
     </script>
