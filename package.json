@@ -1,11 +1,13 @@
 {
   "name": "cinema-radar",
   "version": "1.0.0",
+  "description": "Cinema VOD Radar",
+  "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "stremio-addon-sdk": "^1.1.2",
-    "express": "^4.19.2"
+    "express": "^4.18.2",
+    "jimp": "^0.22.10"
   }
 }
