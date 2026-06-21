@@ -18,17 +18,17 @@
 <body>
     <div class="container">
         <h2>Cinema & VOD Radar</h2>
-        <p>Introdu cheia API TMDB pentru a genera link-ul de instalare:</p>
+        <p>Introdu cheia API TMDB pentru instalare:</p>
         
-        <input type="text" id="tmdbKey" placeholder="Lipește aici cheia TMDB (ex: 3a2b...)">
+        <input type="text" id="tmdbKey" placeholder="Lipește cheia (ex: 3a2b...)">
         <button onclick="generateLink()">Generează Link</button>
 
         <div id="resultArea">
-            <p>Link-ul tău HTTPS:</p>
+            <p>Link-ul tău curat HTTPS:</p>
             <span id="manifestUrl"></span>
             <div style="display: flex; gap: 10px; margin-top: 15px;">
-                <button onclick="copyLink()" style="background: #444; flex: 1;">Copiază Link</button>
-                <button onclick="installStremio()" style="background: #00c853; flex: 1;">Instalează direct în Stremio</button>
+                <button onclick="copyLink()" style="flex: 1; background: #444;">Copiază Link</button>
+                <button onclick="installStremio()" style="flex: 1; background: #00c853;">Instalează (Stremio)</button>
             </div>
         </div>
     </div>
@@ -41,9 +41,8 @@
             const host = window.location.host;
             const protocol = window.location.protocol;
             
-            // Formatul corect impus de Stremio Addon SDK
-            const config = encodeURIComponent(JSON.stringify({ tmdb: key }));
-            const finalUrl = protocol + "//" + host + "/" + config + "/manifest.json";
+            // Link simplu, doar cu cheia directă
+            const finalUrl = protocol + "//" + host + "/" + key + "/manifest.json";
             
             document.getElementById('manifestUrl').innerText = finalUrl;
             document.getElementById('resultArea').style.display = 'block';
