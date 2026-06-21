@@ -4,14 +4,13 @@ const path = require("path");
 
 const app = express();
 
-// Setări obligatorii de securitate (CORS) pentru ca playerele să poată citi datele
+// Setări securitate
 app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Headers', '*');
     next();
 });
 
-// Definirea Manifestului fără blocaje de configurare în Stremio
 const manifest = {
     id: "ro.radar.cinemadates",
     version: "1.0.0",
@@ -25,7 +24,6 @@ const manifest = {
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 
-// Funcția optimizată care aduce filmele și datele de lansare simultan
 async function fetchMovies(apiKey) {
     try {
         const moviesRes = await fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=ro-RO&page=1`);
@@ -46,7 +44,7 @@ async function fetchMovies(apiKey) {
                 if (datesData.results) {
                     for (const r of datesData.results) {
                         for (const release of r.release_dates) {
-                            if (release.type === 4) { // 4 = Lansare Digitală / VOD
+                            if (release.type === 4) { // Lansare VOD
                                 digitalDate = release.release_date.split("T")[0];
                                 break;
                             }
@@ -84,33 +82,25 @@ builder.defineCatalogHandler(async (args) => {
 
 const addonInterface = builder.getInterface();
 
-// --- RUTAREA MANUALĂ ANTIGLONȚ ---
-
-// 1. Pagina web de configurare
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
 });
 
-// 2. Ruta pentru manifestul simplu
 app.get('/manifest.json', (req, res) => {
     res.json(addonInterface.manifest);
 });
 
-// 3. Ruta pentru manifestul cu cheia TMDB inclusă în URL
 app.get('/:config/manifest.json', (req, res) => {
     res.json(addonInterface.manifest);
 });
 
-// 4. Ruta pentru catalogul de filme (Stremio/Nuvio vor cere datele de aici)
-app.get('/:config/catalog/:type/:id.json', async (req, res) => {
+// Functia care ruteaza catalogul corect
+async function handleCatalogRequest(req, res) {
     let configObj = {};
     try {
-        // Decodificăm textul din URL pentru a-l transforma înapoi în cheia TMDB
         configObj = JSON.parse(decodeURIComponent(req.params.config));
     } catch(e) {
-        try {
-            configObj = JSON.parse(req.params.config);
-        } catch(err) {}
+        try { configObj = JSON.parse(req.params.config); } catch(err) {}
     }
     
     try {
@@ -123,10 +113,15 @@ app.get('/:config/catalog/:type/:id.json', async (req, res) => {
     } catch(e) {
         res.json({ metas: [] });
     }
-});
+}
 
-// Pornirea efectivă a serverului pe portul oferit de Koyeb
+// 1. Ruta pentru apelurile simple 
+app.get('/:config/catalog/:type/:id.json', handleCatalogRequest);
+
+// 2. FIXUL AICI: Ruta care intercepteaza apelurile din sectiunea Discover din Stremio (/skip=0.json)
+app.get('/:config/catalog/:type/:id/:extra', handleCatalogRequest);
+
 const port = process.env.PORT || 8000;
 app.listen(port, () => {
-    console.log(`Server pornit cu succes pe portul ${port}`);
+    console.log(`Server pornit pe portul ${port}`);
 });
