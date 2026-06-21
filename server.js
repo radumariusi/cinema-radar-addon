@@ -15,14 +15,14 @@ const manifest = {
     id: "ro.radar.cinemadates",
     version: "1.0.0",
     name: "Cinema Dates Radar",
-    description: "Hollywood/EU Filme VOD. Estimări și date oficiale.",
+    description: "VOD releases with smart missing-date estimation algorithm.",
     resources: ["catalog"],
     types: ["movie"],
-    catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & Lansări VOD" }],
+    catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
     idPrefixes: ["tt"]
 };
 
-// Funcție care transformă o dată în formatul "Late August", "Early Sept" etc.
+// Converts date to readable format (e.g., Late August)
 function getEstimateString(dateObj) {
     const day = dateObj.getDate();
     const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -37,7 +37,7 @@ function getEstimateString(dateObj) {
 
 async function fetchMovies(apiKey) {
     try {
-        // 1. Tragem 5 pagini (100 de filme) pentru a avea balta plină înainte de filtrare
+        // 1. Fetch 5 pages (100 movies)
         const pagePromises = [];
         for (let i = 1; i <= 5; i++) {
             pagePromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
@@ -49,11 +49,10 @@ async function fetchMovies(apiKey) {
             if (p.results) allMovies = allMovies.concat(p.results);
         });
 
-        // 2. LISTA ALBĂ (Doar Hollywood și Mainstream Europa)
+        // 2. WHITELIST (Hollywood & Mainstream Europe)
         const allowedLangs = ['en', 'fr', 'de', 'it', 'es', 'nl', 'sv', 'da', 'no', 'fi'];
         let cleanMovies = allMovies.filter(movie => allowedLangs.includes(movie.original_language));
 
-        // 3. Tăiem la primele 30 cele mai populare filme "curate"
         cleanMovies = cleanMovies.slice(0, 30);
         const today = new Date();
 
@@ -87,9 +86,10 @@ async function fetchMovies(apiKey) {
                 let typeLabel = "";
                 let sortDateObj = null;
                 let isEstimated = false;
+                let estReasonText = ""; 
 
                 if (validDates.length > 0) {
-                    // Avem dată oficială
+                    // Official date found
                     validDates.sort((a, b) => Math.abs(a.date - today) - Math.abs(b.date - today));
                     sortDateObj = validDates[0].date;
                     chosenDateStr = validDates[0].string;
@@ -98,19 +98,48 @@ async function fetchMovies(apiKey) {
                     else if (validDates[0].type === 5) typeLabel = "BluRay";
                     else if (validDates[0].type === 6) typeLabel = "TV";
                 } else {
-                    // Nu avem dată oficială -> Estimăm 45 de zile
+                    // SMART ESTIMATION ALGORITHM
                     isEstimated = true;
                     typeLabel = "EST";
                     
                     let cinemaDate = new Date(movie.release_date);
                     if (isNaN(cinemaDate.getTime())) cinemaDate = today;
                     
-                    // Adunăm 45 de zile (în milisecunde)
-                    sortDateObj = new Date(cinemaDate.getTime() + (45 * 24 * 60 * 60 * 1000));
+                    let daysToAdd = 45; 
+
+                    if (movie.original_language !== 'en') {
+                        // European Rule
+                        daysToAdd = 130;
+                        estReasonText = "European Film (Slow release window: ~130 days)";
+                    } else {
+                        // American Rule
+                        const pop = detailData.popularity || movie.popularity || 0;
+                        const rev = detailData.revenue || 0;
+                        const bud = detailData.budget || 0;
+
+                        if (pop > 800 || rev > 150000000 || bud > 100000000) {
+                            daysToAdd = 75;
+                            estReasonText = "Blockbuster Hit / Massive Budget (~75 days)";
+                        } else if (pop < 150) {
+                            daysToAdd = 21;
+                            estReasonText = "Small Film / BO Flop (~21 days)";
+                        } else {
+                            daysToAdd = 38;
+                            estReasonText = "Standard Performance (~38 days)";
+                        }
+                    }
+                    
+                    sortDateObj = new Date(cinemaDate.getTime() + (daysToAdd * 24 * 60 * 60 * 1000));
                     chosenDateStr = getEstimateString(sortDateObj);
                 }
 
                 const displayTitle = `[${typeLabel}: ${chosenDateStr}] ${movie.title}`;
+                
+                let descText = `Release Type: ${typeLabel}\nDate: ${chosenDateStr}`;
+                if (isEstimated) {
+                    descText += `\nPrediction Algorithm: ${estReasonText}`;
+                }
+                descText += `\n\n${movie.overview}`;
 
                 return {
                     meta: {
@@ -118,7 +147,7 @@ async function fetchMovies(apiKey) {
                         type: "movie",
                         name: displayTitle,
                         poster: `https://image.tmdb.org/t/p/w500${movie.poster_path}`,
-                        description: `Type: ${typeLabel}\nDate: ${chosenDateStr}\n\n${movie.overview}`
+                        description: descText
                     },
                     sortDate: sortDateObj,
                     isEstimated: isEstimated
@@ -128,13 +157,10 @@ async function fetchMovies(apiKey) {
 
         let processedMovies = (await Promise.all(promises)).filter(m => m !== null);
 
-        // 4. SORTAREA FINALĂ
+        // 4. SORTING
         processedMovies.sort((a, b) => {
-            // Regula 1: Cele estimate la începutul listei
             if (a.isEstimated && !b.isEstimated) return -1;
             if (!a.isEstimated && b.isEstimated) return 1;
-
-            // Regula 2: Mai departe în viitor înseamnă mai sus în listă (descrescător)
             return b.sortDate.getTime() - a.sortDate.getTime();
         });
 
@@ -143,7 +169,7 @@ async function fetchMovies(apiKey) {
     } catch (error) { return []; }
 }
 
-// RUTARE WEB
+// MANUAL ROUTING FOR STREMIO
 app.get("/", (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
 });
@@ -152,7 +178,6 @@ app.get("/:apiKey/manifest.json", (req, res) => {
     res.json(manifest);
 });
 
-// RUTARE CATALOG
 async function handleCatalog(req, res) {
     const apiKey = req.params.apiKey;
     const type = req.params.type;
@@ -171,5 +196,5 @@ app.get("/:apiKey/catalog/:type/:id/:extra", handleCatalog);
 
 const port = process.env.PORT || 8000;
 app.listen(port, () => {
-    console.log(`Server pornit pe portul ${port}`);
+    console.log(`Server started on port ${port}`);
 });
