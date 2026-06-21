@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Configurare Cinema Radar</title>
+    <meta charset="utf-8">
+    <style>
+        body { font-family: Arial, sans-serif; background: #121212; color: white; text-align: center; padding: 50px; }
+        .container { max-width: 500px; margin: 0 auto; background: #1e1e1e; padding: 30px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        input { width: 90%; padding: 12px; margin: 20px 0; border-radius: 5px; border: 1px solid #333; background: #2a2a2a; color: white; font-size: 14px; }
+        button { background: #8a5aed; color: white; border: none; padding: 15px 20px; font-size: 16px; border-radius: 5px; cursor: pointer; font-weight: bold; width: 100%; }
+        button:hover { background: #7141cc; }
+        h2 { margin-top: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Setări Cinema & VOD Radar</h2>
+        <p>Introdu cheia ta TMDB API (v3 auth) pentru a activa catalogul:</p>
+        
+        <input type="text" id="tmdbKey" placeholder="Aici pui cheia TMDB...">
+        
+        <button onclick="installAddon()">Instalează în Stremio</button>
+    </div>
+
+    <script>
+        function installAddon() {
+            // Luăm cheia scrisă de tine în căsuță
+            const key = document.getElementById('tmdbKey').value.trim();
+            
+            if (!key) {
+                alert("Te rog să introduci cheia TMDB mai întâi!");
+                return;
+            }
+
+            // Împachetăm cheia pentru Stremio
+            const config = { tmdb: key };
+            const configStr = JSON.stringify(config);
+            
+            // Aflăm adresa pe care rulează pagina (ex: nume.koyeb.app)
+            const host = window.location.host;
+            
+            // Creăm link-ul magic de instalare pentru Stremio
+            const stremioUrl = "stremio://" + host + "/" + encodeURIComponent(configStr) + "/manifest.json";
+            
+            // Trimitem browserul să deschidă Stremio
+            window.location.href = stremioUrl;
+        }
+    </script>
+</body>
+</html>
