@@ -6,17 +6,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f1a; color: white; text-align: center; padding: 20px; }
-        .container { max-width: 600px; margin: 50px auto; background: #1a1a2e; padding: 40px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.7); border: 1px solid #303050; }
+        .container { max-width: 600px; margin: 50px auto; background: #1a1a2e; padding: 40px; border-radius: 15px; border: 1px solid #303050; }
         h2 { color: #a277ff; margin-bottom: 10px; }
-        p { color: #b0b0c0; font-size: 14px; }
         input { width: 100%; padding: 12px; margin: 20px 0; border-radius: 8px; border: 1px solid #333; background: #0f0f1a; color: white; font-size: 16px; box-sizing: border-box; }
-        .button-group { display: flex; gap: 10px; flex-direction: column; }
-        button { background: #6200ee; color: white; border: none; padding: 15px; font-size: 16px; border-radius: 8px; cursor: pointer; font-weight: bold; transition: 0.3s; }
+        button { background: #6200ee; color: white; border: none; padding: 15px; font-size: 16px; border-radius: 8px; cursor: pointer; width: 100%; font-weight: bold; }
         button:hover { background: #3700b3; }
-        #installBtn { background: #00c853; }
-        #installBtn:hover { background: #009624; }
         #resultArea { margin-top: 30px; display: none; background: #0f0f1a; padding: 20px; border-radius: 8px; border: 1px dashed #6200ee; }
-        #manifestUrl { word-break: break-all; font-family: monospace; color: #00e5ff; font-size: 13px; display: block; margin-bottom: 15px; }
+        #manifestUrl { word-break: break-all; font-family: monospace; color: #00e5ff; font-size: 14px; display: block; margin-bottom: 15px; }
     </style>
 </head>
 <body>
@@ -25,17 +21,14 @@
         <p>Introdu cheia API TMDB pentru a genera link-ul de instalare:</p>
         
         <input type="text" id="tmdbKey" placeholder="Lipește aici cheia TMDB (ex: 3a2b...)">
-        
-        <div class="button-group">
-            <button onclick="generateLink()">Generează Link</button>
-        </div>
+        <button onclick="generateLink()">Generează Link</button>
 
         <div id="resultArea">
-            <p style="color: #a277ff; font-weight: bold;">Link-ul tău HTTPS:</p>
+            <p>Link-ul tău HTTPS:</p>
             <span id="manifestUrl"></span>
-            <div style="display: flex; gap: 10px;">
-                <button onclick="copyLink()" style="flex: 1; background: #444;">Copiază Link</button>
-                <button id="installBtn" onclick="installStremio()" style="flex: 1;">Instalează în Stremio</button>
+            <div style="display: flex; gap: 10px; margin-top: 15px;">
+                <button onclick="copyLink()" style="background: #444;">Copiază Link</button>
+                <button onclick="installStremio()" style="background: #00c853;">Instalează direct în Stremio</button>
             </div>
         </div>
     </div>
@@ -48,9 +41,8 @@
             const host = window.location.host;
             const protocol = window.location.protocol;
             
-            // Formatul pentru configurare în Stremio SDK: /{"tmdb":"cheie"}/manifest.json
-            const config = encodeURIComponent(JSON.stringify({ tmdb: key }));
-            const finalUrl = protocol + "//" + host + "/" + config + "/manifest.json";
+            // LINK CURAT: domeniu.com/API_KEY/manifest.json
+            const finalUrl = protocol + "//" + host + "/" + key + "/manifest.json";
             
             document.getElementById('manifestUrl').innerText = finalUrl;
             document.getElementById('resultArea').style.display = 'block';
@@ -58,15 +50,12 @@
 
         function copyLink() {
             const url = document.getElementById('manifestUrl').innerText;
-            navigator.clipboard.writeText(url).then(() => {
-                alert("Link-ul a fost copiat în clipboard!");
-            });
+            navigator.clipboard.writeText(url).then(() => alert("Link copiat!"));
         }
 
         function installStremio() {
             const url = document.getElementById('manifestUrl').innerText;
-            const stremioUrl = url.replace(/^https?:\/\//, 'stremio://');
-            window.location.href = stremioUrl;
+            window.location.href = url.replace(/^https?:\/\//, 'stremio://');
         }
     </script>
 </body>
