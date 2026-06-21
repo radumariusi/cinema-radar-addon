@@ -1,8 +1,15 @@
 const express = require("express");
-const { addonBuilder, getRouter } = require("stremio-addon-sdk");
+const { addonBuilder } = require("stremio-addon-sdk"); // Am eliminat complet getRouter
 const path = require("path");
 
 const app = express();
+
+// 1. Setări obligatorii de securitate (CORS) - Fără ele Stremio blochează addon-ul
+app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    next();
+});
 
 const manifest = {
     id: "ro.radar.cinemadates",
@@ -74,14 +81,44 @@ builder.defineCatalogHandler(async (args) => {
     return { metas: [] };
 });
 
-// FIXUL AICI: Montăm routerul SDK-ului direct, pentru a nu bloca cererile de securitate ale Stremio
-app.use(getRouter(builder.getInterface()));
+const addonInterface = builder.getInterface();
 
-// Pagina web de configurare
-app.get("/", (req, res) => {
+// 2. RUTARE MANUALĂ (Am scris noi regulile, serverul nu mai dă "Cannot GET")
+app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, "index.html"));
 });
 
+// Ruta standard pentru manifest
+app.get('/manifest.json', (req, res) => {
+    res.json(addonInterface.manifest);
+});
+
+// Ruta pentru manifest care conține cheia TMDB în URL
+app.get('/:config/manifest.json', (req, res) => {
+    res.json(addonInterface.manifest);
+});
+
+// Ruta care aduce filmele, folosind cheia din URL
+app.get('/:config/catalog/:type/:id.json', async (req, res) => {
+    let configObj = {};
+    try {
+        // Luăm cheia din URL
+        configObj = JSON.parse(req.params.config);
+    } catch(e) {}
+    
+    try {
+        const response = await addonInterface.get("catalog", { 
+            type: req.params.type, 
+            id: req.params.id, 
+            config: configObj 
+        });
+        res.json(response);
+    } catch(e) {
+        res.json({ metas: [] });
+    }
+});
+
+// 3. Pornirea serverului
 const port = process.env.PORT || 8000;
 app.listen(port, () => {
     console.log(`Server pornit pe portul ${port}`);
