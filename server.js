@@ -12,12 +12,12 @@ app.use((req, res, next) => {
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
 
 // ====== SETARE IMPORTANTĂ ======
-const IMAGEKIT_ID = "pune_id_ul_tau_aici"; // <-- ÎNLOCUIEȘTE CU ID-UL TĂU (ex: cinemaradar)
+const IMAGEKIT_ID = "cinemaradar"; // <-- ÎNLOCUIEȘTE CU ID-UL TĂU (ex: cinemaradar)
 // ===============================
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.0.0",
+    version: "1.0.1",
     name: "Cinema Dates Radar",
     description: "VOD estimates via ImageKit CDN for maximum speed.",
     resources: ["catalog"],
