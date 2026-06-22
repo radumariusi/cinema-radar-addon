@@ -10,28 +10,26 @@ app.use((req, res, next) => {
 });
 
 const TMDB_BASE_URL = "https://api.themoviedb.org/3";
-
-// ====== SETARE IMPORTANTĂ ======
-const IMAGEKIT_ID = "cinemaradar"; // <-- ÎNLOCUIEȘTE CU ID-UL TĂU (ex: cinemaradar)
-// ===============================
+const IMAGEKIT_ID = "cinemaradar"; 
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.0.1",
+    version: "1.0.3", // Versiune nouă pentru a forța Nuvio/Stremio să șteargă cache-ul vechi
     name: "Cinema Dates Radar",
-    description: "VOD estimates via ImageKit CDN for maximum speed.",
+    description: "VOD estimates via ImageKit URL Transformations.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
     idPrefixes: ["tt"]
 };
 
-// --- SEIFUL DE MEMORIE (Doar pentru textul listei, nu pentru poze) ---
+// Seiful de memorie (Doar pentru lista de text, nu mai ținem poze în RAM)
 const globalCache = {
     movies: [],          
     lastFetch: 0        
 };
 
+// Format european: ZZ.LL.AAAA
 function formatDateEU(dateObj) {
     const d = String(dateObj.getDate()).padStart(2, '0');
     const m = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -39,6 +37,7 @@ function formatDateEU(dateObj) {
     return `${d}.${m}.${y}`;
 }
 
+// Algoritmul de predicție
 function calculateVOD(movie, detailData) {
     let validDates = [];
     const today = new Date();
@@ -86,6 +85,7 @@ function calculateVOD(movie, detailData) {
 }
 
 async function fetchMovies(apiKey) {
+    // Cache mapat pe 1 oră pentru lista de filme
     if (globalCache.movies.length > 0 && (Date.now() - globalCache.lastFetch < 3600000)) {
         return globalCache.movies;
     }
@@ -113,10 +113,13 @@ async function fetchMovies(apiKey) {
                 const textToStamp = `${vodInfo.typeLabel}: ${vodInfo.chosenDateStr}`;
                 const displayTitle = `[${textToStamp}] ${movie.title}`;
 
-                // FORMULA MAGICĂ IMAGEKIT PENTRU VITEZĂ MAXIMĂ
-                // ots-45 = font 45, otc-FFFFFF = text alb, otbg-000000CC = bandă neagră semi-opacă, otp-15 = padding banda, oa-bottom = aliniere jos
-                const imageKitTransform = `tr:ot-${encodeURIComponent(textToStamp)},ots-45,otc-FFFFFF,otbg-000000CC,otp-15,oa-bottom`;
-                const customPosterUrl = `https://ik.imagekit.io/${IMAGEKIT_ID}/${imageKitTransform}/t/p/w500${movie.poster_path}`;
+                // Conversie text în Base64 pentru a securiza caracterele speciale (cum ar fi ":")
+                const base64Text = Buffer.from(textToStamp).toString('base64');
+                const encodedText = encodeURIComponent(base64Text);
+                
+                // Construirea URL-ului prin noul endpoint `/tmdb/` și parametrii optimizați (fs-40 = dimensiune perfectă pentru w500)
+                const imageKitTransform = `?tr=l-text,ie-${encodedText},fs-40,co-FFFFFF,bg-000000CC,w-500,pa-15,lfo-bottom,l-end`;
+                const customPosterUrl = `https://ik.imagekit.io/${IMAGEKIT_ID}/tmdb/t/p/w500${movie.poster_path}${imageKitTransform}`;
 
                 return {
                     meta: {
@@ -150,7 +153,7 @@ async function fetchMovies(apiKey) {
     }
 }
 
-// --- RUTARI MANUALE ---
+// Rutări
 app.get("/", (req, res) => { res.sendFile(path.join(__dirname, "index.html")); });
 app.get("/:apiKey/manifest.json", (req, res) => { res.json(manifest); });
 
