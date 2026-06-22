@@ -14,9 +14,9 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.4.1",
+    version: "1.5.0",
     name: "Cinema Dates Radar",
-    description: "Upcoming (10) + Now Playing (30) = 40 films. No cache.",
+    description: "Upcoming (15) + Now Playing (35) = 50 films. No cache.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
@@ -28,9 +28,9 @@ const allowedCountries = ['US', 'GB', 'RO', 'FR', 'DE', 'IT', 'ES', 'NL', 'SE', 
 
 const GUARANTEED_TMDB_IDS = [
     1081003,  // Supergirl: Woman of Tomorrow
-    986056,   // Thunderbolts
+    986056,   // Thunderbolts*
     574475,   // Final Destination: Bloodlines
-    950387,   // How to Train Your Dragon
+    950387,   // A Minecraft Movie
     558449,   // Gladiator II
     748783,   // The Wild Robot
 ];
@@ -73,7 +73,6 @@ function resolveBucketAndDates(movie, detailData) {
     }
 
     let cinemaDate = mainDate;
-
     if (type3Dates.length > 0) {
         const futureT3 = type3Dates.filter(d => d >= today);
         const pastT3   = type3Dates.filter(d => d < today);
@@ -190,51 +189,39 @@ async function processMovie(movie, apiKey) {
 }
 
 async function fetchMovies(apiKey) {
-    // CACHE DEZACTIVAT
     try {
         const todayMidnight = new Date();
         todayMidnight.setHours(0, 0, 0, 0);
 
         const threeMonthsAgo  = new Date(todayMidnight.getTime() -  90 * 24 * 60 * 60 * 1000);
-
-        // MOD E: fereastra NP extinsa la 9 luni (270 zile)
         const nineMonthsAgo   = new Date(todayMidnight.getTime() - 270 * 24 * 60 * 60 * 1000);
-
-        // MOD A: fereastra UP extinsa la 180 zile (6 luni in viitor)
         const sixMonthsLater  = new Date(todayMidnight.getTime() + 180 * 24 * 60 * 60 * 1000);
 
-        const todayStr       = todayMidnight.toISOString().split('T')[0];
-        const sixMonthsStr   = sixMonthsLater.toISOString().split('T')[0];
+        const todayStr      = todayMidnight.toISOString().split('T')[0];
+        const sixMonthsStr  = sixMonthsLater.toISOString().split('T')[0];
 
         console.log(`\n========== FETCH START ${new Date().toISOString()} ==========`);
 
         const pagePromises = [];
 
-        // 10 pagini now_playing
         for (let i = 1; i <= 10; i++) {
             pagePromises.push(
                 fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`)
                     .then(r => r.json()).catch(() => ({ results: [] }))
             );
         }
-
-        // MOD A: primary_release_date.lte = +180 zile (era +90)
         for (let i = 1; i <= 10; i++) {
             pagePromises.push(
                 fetch(`${TMDB_BASE_URL}/discover/movie?api_key=${apiKey}&language=en-US&sort_by=popularity.desc&primary_release_date.gte=${todayStr}&primary_release_date.lte=${sixMonthsStr}&page=${i}`)
                     .then(r => r.json()).catch(() => ({ results: [] }))
             );
         }
-
-        // MOD D: upcoming region=US marit la 10 pagini (era 5)
         for (let i = 1; i <= 10; i++) {
             pagePromises.push(
                 fetch(`${TMDB_BASE_URL}/movie/upcoming?api_key=${apiKey}&language=en-US&region=US&page=${i}`)
                     .then(r => r.json()).catch(() => ({ results: [] }))
             );
         }
-
-        // Discover fara limita superioara (blockbustere anuntate departe)
         for (let i = 1; i <= 5; i++) {
             pagePromises.push(
                 fetch(`${TMDB_BASE_URL}/discover/movie?api_key=${apiKey}&language=en-US&sort_by=popularity.desc&primary_release_date.gte=${todayStr}&page=${i}`)
@@ -253,7 +240,6 @@ async function fetchMovies(apiKey) {
             }
         });
 
-        // Garantate: fetch fortat daca lipsesc
         for (const tmdbId of GUARANTEED_TMDB_IDS) {
             if (!uniqueMoviesMap.has(tmdbId)) {
                 console.log(`[GUARANTEED] Fetching forced: ${tmdbId}`);
@@ -275,25 +261,15 @@ async function fetchMovies(apiKey) {
         let masterList = Array.from(uniqueMoviesMap.values());
         console.log(`Total unique before filter: ${masterList.length}`);
 
-        // MOD B: popularity minima coborata la 30 pentru UP
-        // Pentru NP ramane 50 ca sa mentinem calitatea
-        // Garantatele trec indiferent
+        // FILTRU UNIFICAT: popularity >= 15 pentru toate, limba acceptata
+        // Garantatele trec indiferent de popularity
         masterList = masterList.filter(m => {
             if (GUARANTEED_TMDB_IDS.includes(m.id)) return true;
             if (!allowedLangs.includes(m.original_language)) return false;
-
-            // MOD B: filmele viitoare (release_date >= azi) acceptate cu popularity >= 30
-            const releaseDate = new Date(m.release_date || '');
-            const today = new Date();
-            today.setHours(0,0,0,0);
-            if (!isNaN(releaseDate.getTime()) && releaseDate >= today) {
-                return m.popularity >= 30; // MOD B: prag mai mic pentru potential UP
-            }
-
-            return m.popularity >= 50; // NP ramane la 50
+            return m.popularity >= 15;
         });
 
-        console.log(`After filter: ${masterList.length}`);
+        console.log(`After filter (pop>=15): ${masterList.length}`);
 
         let poolNP = [];
         let poolUP = [];
@@ -314,45 +290,39 @@ async function fetchMovies(apiKey) {
 
         let globalSeenIds = new Set();
 
-        // --- UPCOMING: 10 filme, lansarile cele mai iminente primele la selectie ---
+        // --- UPCOMING: 15 filme, iminente primele la selectie ---
         poolUP.sort((a, b) => a.cinemaDate.getTime() - b.cinemaDate.getTime());
         let finalUpcoming = [];
         for (const item of poolUP) {
-            if (finalUpcoming.length === 10) break;
+            if (finalUpcoming.length === 15) break;
             if (!globalSeenIds.has(item.imdbId)) {
                 globalSeenIds.add(item.imdbId);
                 finalUpcoming.push(item);
             }
         }
-        // Dupa selectie: cel mai indepartat primul pentru afisare Stremio
+        // Dupa selectie: cel mai indepartat primul pentru Stremio
         finalUpcoming.sort((a, b) => b.cinemaDate.getTime() - a.cinemaDate.getTime());
-        console.log(`Final UP (${finalUpcoming.length}): ${finalUpcoming.map(x=>x.movie.title).join(', ')}`);
+        console.log(`Final UP (${finalUpcoming.length}): ${finalUpcoming.map(x => x.movie.title).join(', ')}`);
 
-        // --- NOW PLAYING: 30 filme ---
-        // MOD E: fereastra extinsa la 9 luni (nineMonthsAgo)
+        // --- NOW PLAYING: 35 filme ---
         let filteredNP = poolNP.filter(item => item.cinemaDate >= nineMonthsAgo);
-
-        // Filtru EST VOD: elimina estimarile mai vechi de 3 luni
         filteredNP = filteredNP.filter(item => {
             if (item.vodInfo.isEstimated && item.vodInfo.sortDateObj < threeMonthsAgo) return false;
             return true;
         });
-
         filteredNP.sort((a, b) => b.movie.popularity - a.movie.popularity);
 
         let finalNowPlaying = [];
         for (const item of filteredNP) {
-            if (finalNowPlaying.length === 30) break;
+            if (finalNowPlaying.length === 35) break;
             if (!globalSeenIds.has(item.imdbId)) {
                 globalSeenIds.add(item.imdbId);
                 finalNowPlaying.push(item);
             }
         }
-        // NP sortat descrescator dupa VOD (viitor -> trecut)
         finalNowPlaying.sort((a, b) => b.vodInfo.sortDateObj.getTime() - a.vodInfo.sortDateObj.getTime());
-        console.log(`Final NP (${finalNowPlaying.length}): ${finalNowPlaying.map(x=>x.movie.title).join(', ')}`);
+        console.log(`Final NP (${finalNowPlaying.length}): ${finalNowPlaying.map(x => x.movie.title).join(', ')}`);
 
-        // --- GENERARE POSTERE IMAGEKIT ---
         const metasNP = finalNowPlaying.map(item => {
             const topText = encodeURIComponent(Buffer.from("In Cinema").toString('base64'));
             const botText = encodeURIComponent(
