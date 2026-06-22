@@ -14,7 +14,7 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.5.1",
+    version: "1.6.0",
     name: "Cinema Dates Radar",
     description: "Upcoming (10) + Now Playing (30) = 40 films. No cache.",
     resources: ["catalog"],
@@ -25,15 +25,6 @@ const manifest = {
 
 const allowedLangs = ['en', 'ro', 'fr', 'de', 'it', 'es', 'nl', 'sv', 'da', 'no', 'fi'];
 const allowedCountries = ['US', 'GB', 'RO', 'FR', 'DE', 'IT', 'ES', 'NL', 'SE', 'DK', 'NO', 'FI'];
-
-const GUARANTEED_TMDB_IDS = [
-    1081003,  // Supergirl: Woman of Tomorrow
-    986056,   // Thunderbolts*
-    574475,   // Final Destination: Bloodlines
-    950387,   // A Minecraft Movie
-    558449,   // Gladiator II
-    748783,   // The Wild Robot
-];
 
 function formatDateEU(dateObj) {
     const d = String(dateObj.getDate()).padStart(2, '0');
@@ -52,7 +43,9 @@ function getEstimatedPeriod(dateObj) {
     return `Late ${month}`;
 }
 
-function resolveBucketAndDates(movie, detailData) {
+// Returneaza cinemaDate RAW (fara ajustare VOD) si bucket initial
+// Ajustarea cu VOD se face in processMovie dupa ce avem si vodInfo
+function resolveCinemaDate(movie, detailData) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -83,28 +76,29 @@ function resolveBucketAndDates(movie, detailData) {
         }
     }
 
-    if (isNaN(cinemaDate.getTime())) return { bucket: 'NONE', cinemaDate: null };
+    if (isNaN(cinemaDate.getTime())) return null;
     cinemaDate.setHours(0, 0, 0, 0);
-
-    if (cinemaDate >= today) {
-        return { bucket: 'UP', cinemaDate };
-    } else {
-        return { bucket: 'NP', cinemaDate };
-    }
+    return cinemaDate;
 }
 
-function calculateVOD(movie, detailData) {
-    let validDates = [];
+// FIX 2 + 3 + 4: logica completa VOD
+// bucket = bucket initial bazat pe cinemaDate (inainte de ajustare)
+// cinemaDate = data cinema raw
+// Returneaza { typeLabel, chosenDateStr, isEstimated, sortDateObj }
+// SI corecteaza cinemaDate daca VOD < cinemaDate (FIX 4)
+function calculateVOD(movie, detailData, cinemaDate, bucket) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
+    // Colecteaza toate datele digitale (type 4=VOD, 5=BluRay, 6=TV)
+    let digitalDates = [];
     if (detailData.release_dates && detailData.release_dates.results) {
         for (const r of detailData.release_dates.results) {
             for (const release of r.release_dates) {
                 if (release.type === 4 || release.type === 5 || release.type === 6) {
                     const releaseDate = new Date(release.release_date);
                     if (!isNaN(releaseDate.getTime())) {
-                        validDates.push({ date: releaseDate, type: release.type });
+                        digitalDates.push({ date: releaseDate, type: release.type });
                     }
                 }
             }
@@ -112,21 +106,41 @@ function calculateVOD(movie, detailData) {
     }
 
     let typeLabel = "", sortDateObj = null, isEstimated = false, chosenDateStr = "";
+    let adjustedCinemaDate = cinemaDate; // poate fi modificata de FIX 4
+    let adjustedBucket = bucket;
 
-    if (validDates.length > 0) {
-        const future = validDates.filter(x => x.date >= today).sort((a, b) => a.date - b.date);
-        const past   = validDates.filter(x => x.date < today).sort((a, b) => b.date - a.date);
-        const chosen = future.length > 0 ? future[0] : past[0];
-        sortDateObj   = chosen.date;
+    if (digitalDates.length > 0) {
+        // FIX 2: Daca exista date in TRECUT => cea mai recenta din trecut
+        // Daca DOAR date in viitor => cea mai apropiata viitoare
+        const pastDates   = digitalDates.filter(x => x.date <= today).sort((a, b) => b.date - a.date);
+        const futureDates = digitalDates.filter(x => x.date > today).sort((a, b) => a.date - b.date);
+
+        const chosen = pastDates.length > 0 ? pastDates[0] : futureDates[0];
+        sortDateObj  = chosen.date;
+
         if (chosen.type === 4) typeLabel = "VOD";
         else if (chosen.type === 5) typeLabel = "BluRay";
         else if (chosen.type === 6) typeLabel = "TV";
+
         chosenDateStr = formatDateEU(sortDateObj);
+
+        // FIX 4: Daca data digitala e INAINTE de cinemaDate
+        // => cinemaDate devine data digitala, re-evaluam bucket
+        if (sortDateObj < cinemaDate) {
+            adjustedCinemaDate = new Date(sortDateObj);
+            adjustedCinemaDate.setHours(0, 0, 0, 0);
+            // Re-evaluam bucket: daca data digitala e in trecut => NP
+            adjustedBucket = adjustedCinemaDate < today ? 'NP' : 'UP';
+            console.log(`[FIX4] ${movie.title}: cinemaDate ${formatDateEU(cinemaDate)} -> ${formatDateEU(adjustedCinemaDate)}, bucket ${bucket} -> ${adjustedBucket}`);
+        }
+
     } else {
+        // Nu exista date digitale confirmate => estimam
         isEstimated = true;
         typeLabel   = "EST";
-        let cinemaDate = new Date(movie.release_date || '');
-        if (isNaN(cinemaDate.getTime())) cinemaDate = today;
+
+        // Baza de calcul: cinemaDate (data lansarii in cinema)
+        let baseDate = new Date(cinemaDate);
 
         let daysToAdd = 45;
         if (movie.original_language && movie.original_language !== 'en') {
@@ -139,11 +153,27 @@ function calculateVOD(movie, detailData) {
             else if (pop < 150) daysToAdd = 21;
             else daysToAdd = 38;
         }
-        sortDateObj   = new Date(cinemaDate.getTime() + (daysToAdd * 24 * 60 * 60 * 1000));
+
+        sortDateObj = new Date(baseDate.getTime() + (daysToAdd * 24 * 60 * 60 * 1000));
+
+        // FIX 3: Daca estimatul a iesit in TRECUT (film NP fara VOD confirmat)
+        // => recalculam de la AZI in viitor (filmul inca nu a aparut pe digital)
+        if (bucket === 'NP' && sortDateObj < today) {
+            console.log(`[FIX3] ${movie.title}: EST was in past (${formatDateEU(sortDateObj)}), recalculating from today`);
+            sortDateObj = new Date(today.getTime() + (daysToAdd * 24 * 60 * 60 * 1000));
+        }
+
         chosenDateStr = getEstimatedPeriod(sortDateObj);
     }
 
-    return { typeLabel, chosenDateStr, isEstimated, sortDateObj };
+    return {
+        typeLabel,
+        chosenDateStr,
+        isEstimated,
+        sortDateObj,
+        adjustedCinemaDate,  // FIX 4: poate diferi de cinemaDate original
+        adjustedBucket       // FIX 4: poate diferi de bucket original
+    };
 }
 
 async function processMovie(movie, apiKey) {
@@ -159,6 +189,7 @@ async function processMovie(movie, apiKey) {
             return null;
         }
 
+        // Filtru tara origine
         let isAllowedOrigin = false;
         const origins = detailData.origin_country || [];
         if (origins.length > 0) {
@@ -172,30 +203,43 @@ async function processMovie(movie, apiKey) {
             return null;
         }
 
-        // FIX FILME VECHI: data originala de release (release_date din TMDB, inainte de type3)
-        // Daca filmul a fost lansat prima data in urma cu mai mult de 2 ani => exclus din NP
-        // Exceptie: filmele din GUARANTEED_TMDB_IDS trec indiferent
+        // FIX 1: Eliminat GUARANTEED - filtru simplu: original release_date max 2 ani in urma
         const originalReleaseDate = new Date(movie.release_date || detailData.release_date || '');
         const twoYearsAgo = new Date();
         twoYearsAgo.setFullYear(twoYearsAgo.getFullYear() - 2);
-
-        if (!GUARANTEED_TMDB_IDS.includes(movie.id) &&
-            !isNaN(originalReleaseDate.getTime()) &&
-            originalReleaseDate < twoYearsAgo) {
-            console.log(`[SKIP] ${movie.title} - original release too old: ${movie.release_date}`);
+        if (!isNaN(originalReleaseDate.getTime()) && originalReleaseDate < twoYearsAgo) {
+            console.log(`[SKIP] ${movie.title} - too old: ${movie.release_date}`);
             return null;
         }
 
-        const { bucket, cinemaDate } = resolveBucketAndDates(movie, detailData);
-        if (!bucket || bucket === 'NONE') {
-            console.log(`[SKIP] ${movie.title} - bucket NONE, release_date: ${movie.release_date}`);
+        // Obtine cinemaDate raw
+        const cinemaDateRaw = resolveCinemaDate(movie, detailData);
+        if (!cinemaDateRaw) {
+            console.log(`[SKIP] ${movie.title} - no valid cinemaDate`);
             return null;
         }
 
-        const vodInfo = calculateVOD(movie, detailData);
-        console.log(`[OK] ${movie.title} | bucket=${bucket} | cinemaDate=${cinemaDate ? formatDateEU(cinemaDate) : 'N/A'} | pop=${movie.popularity} | origRelease=${movie.release_date}`);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const bucketRaw = cinemaDateRaw >= today ? 'UP' : 'NP';
 
-        return { bucket, movie, detailData, imdbId, vodInfo, cinemaDate };
+        // Calculeaza VOD cu toate fix-urile (2, 3, 4)
+        const vodInfo = calculateVOD(movie, detailData, cinemaDateRaw, bucketRaw);
+
+        // Bucket si cinemaDate finale (pot fi ajustate de FIX 4)
+        const finalBucket     = vodInfo.adjustedBucket;
+        const finalCinemaDate = vodInfo.adjustedCinemaDate;
+
+        console.log(`[OK] ${movie.title} | bucket=${finalBucket} | cinemaDate=${formatDateEU(finalCinemaDate)} | vod=${vodInfo.typeLabel}:${vodInfo.chosenDateStr} | pop=${movie.popularity}`);
+
+        return {
+            bucket: finalBucket,
+            movie,
+            detailData,
+            imdbId,
+            vodInfo,
+            cinemaDate: finalCinemaDate
+        };
     } catch (err) {
         console.log(`[ERR] ${movie.id} - ${err.message}`);
         return null;
@@ -207,13 +251,12 @@ async function fetchMovies(apiKey) {
         const todayMidnight = new Date();
         todayMidnight.setHours(0, 0, 0, 0);
 
-        const threeMonthsAgo  = new Date(todayMidnight.getTime() -  90 * 24 * 60 * 60 * 1000);
-        // FIX: fereastra NP revenita la 9 luni (270 zile) dar cu filtrul de 2 ani pe release original
-        const nineMonthsAgo   = new Date(todayMidnight.getTime() - 270 * 24 * 60 * 60 * 1000);
-        const sixMonthsLater  = new Date(todayMidnight.getTime() + 180 * 24 * 60 * 60 * 1000);
+        const threeMonthsAgo = new Date(todayMidnight.getTime() -  90 * 24 * 60 * 60 * 1000);
+        const nineMonthsAgo  = new Date(todayMidnight.getTime() - 270 * 24 * 60 * 60 * 1000);
+        const sixMonthsLater = new Date(todayMidnight.getTime() + 180 * 24 * 60 * 60 * 1000);
 
-        const todayStr      = todayMidnight.toISOString().split('T')[0];
-        const sixMonthsStr  = sixMonthsLater.toISOString().split('T')[0];
+        const todayStr     = todayMidnight.toISOString().split('T')[0];
+        const sixMonthsStr = sixMonthsLater.toISOString().split('T')[0];
 
         console.log(`
 ========== FETCH START ${new Date().toISOString()} ==========`);
@@ -256,30 +299,11 @@ async function fetchMovies(apiKey) {
             }
         });
 
-        for (const tmdbId of GUARANTEED_TMDB_IDS) {
-            if (!uniqueMoviesMap.has(tmdbId)) {
-                console.log(`[GUARANTEED] Fetching forced: ${tmdbId}`);
-                try {
-                    const r = await fetch(`${TMDB_BASE_URL}/movie/${tmdbId}?api_key=${apiKey}&language=en-US`);
-                    const d = await r.json();
-                    if (d.id) {
-                        uniqueMoviesMap.set(d.id, d);
-                        console.log(`[GUARANTEED] Added: ${d.title} (pop=${d.popularity})`);
-                    }
-                } catch(e) {
-                    console.log(`[GUARANTEED] Failed ${tmdbId}: ${e.message}`);
-                }
-            } else {
-                console.log(`[GUARANTEED] Already in pool: ${uniqueMoviesMap.get(tmdbId).title}`);
-            }
-        }
-
         let masterList = Array.from(uniqueMoviesMap.values());
         console.log(`Total unique before filter: ${masterList.length}`);
 
-        // Popularity >= 15 pentru toate, limba acceptata, garantatele trec
+        // Popularity >= 15 + limba acceptata
         masterList = masterList.filter(m => {
-            if (GUARANTEED_TMDB_IDS.includes(m.id)) return true;
             if (!allowedLangs.includes(m.original_language)) return false;
             return m.popularity >= 15;
         });
@@ -305,8 +329,10 @@ async function fetchMovies(apiKey) {
 
         let globalSeenIds = new Set();
 
-        // --- UPCOMING: 10 filme, iminente primele la selectie ---
-        poolUP.sort((a, b) => a.cinemaDate.getTime() - b.cinemaDate.getTime());
+        // --- UPCOMING: 10 filme ---
+        // FIX 5: sortat dupa vodSortDate (nu cinemaDate)
+        // Selectie: cel mai iminent VOD primul
+        poolUP.sort((a, b) => a.vodInfo.sortDateObj.getTime() - b.vodInfo.sortDateObj.getTime());
         let finalUpcoming = [];
         for (const item of poolUP) {
             if (finalUpcoming.length === 10) break;
@@ -315,15 +341,20 @@ async function fetchMovies(apiKey) {
                 finalUpcoming.push(item);
             }
         }
-        finalUpcoming.sort((a, b) => b.cinemaDate.getTime() - a.cinemaDate.getTime());
-        console.log(`Final UP (${finalUpcoming.length}): ${finalUpcoming.map(x => x.movie.title).join(', ')}`);
+        // Dupa selectie: cel mai indepartat VOD primul pentru afisare Stremio
+        finalUpcoming.sort((a, b) => b.vodInfo.sortDateObj.getTime() - a.vodInfo.sortDateObj.getTime());
+        console.log(`Final UP (${finalUpcoming.length}): ${finalUpcoming.map(x => `${x.movie.title}(${formatDateEU(x.vodInfo.sortDateObj)})`).join(', ')}`);
 
         // --- NOW PLAYING: 30 filme ---
         let filteredNP = poolNP.filter(item => item.cinemaDate >= nineMonthsAgo);
+
+        // Elimina EST mai vechi de 3 luni (deja recalculate de FIX 3, deci nu ar trebui sa existe)
+        // Pastram filtrul ca safety net
         filteredNP = filteredNP.filter(item => {
             if (item.vodInfo.isEstimated && item.vodInfo.sortDateObj < threeMonthsAgo) return false;
             return true;
         });
+
         filteredNP.sort((a, b) => b.movie.popularity - a.movie.popularity);
 
         let finalNowPlaying = [];
@@ -334,9 +365,16 @@ async function fetchMovies(apiKey) {
                 finalNowPlaying.push(item);
             }
         }
+        // NP sortat descrescator dupa VOD (viitor -> trecut)
         finalNowPlaying.sort((a, b) => b.vodInfo.sortDateObj.getTime() - a.vodInfo.sortDateObj.getTime());
-        console.log(`Final NP (${finalNowPlaying.length}): ${finalNowPlaying.map(x => x.movie.title).join(', ')}`);
+        console.log(`Final NP (${finalNowPlaying.length}): ${finalNowPlaying.map(x => `${x.movie.title}(${vodLabel(x)})`).join(', ')}`);
 
+        // Helper log
+        function vodLabel(item) {
+            return `${item.vodInfo.typeLabel}:${item.vodInfo.chosenDateStr}`;
+        }
+
+        // --- GENERARE POSTERE IMAGEKIT ---
         const metasNP = finalNowPlaying.map(item => {
             const topText = encodeURIComponent(Buffer.from("In Cinema").toString('base64'));
             const botText = encodeURIComponent(
@@ -353,8 +391,10 @@ async function fetchMovies(apiKey) {
         });
 
         const metasUP = finalUpcoming.map(item => {
-            const dateStr = formatDateEU(item.cinemaDate);
-            const topText = encodeURIComponent(Buffer.from(`Upcoming | ${dateStr}`).toString('base64'));
+            // FIX 5: data afisata pe poster = cinemaDate (pentru filme cu cinema real)
+            // sau vodDate (pentru filme direct streaming unde cinema=vod)
+            const displayDate = formatDateEU(item.cinemaDate);
+            const topText = encodeURIComponent(Buffer.from(`Upcoming | ${displayDate}`).toString('base64'));
             const botText = encodeURIComponent(
                 Buffer.from(`${item.vodInfo.typeLabel}: ${item.vodInfo.chosenDateStr}`).toString('base64')
             );
