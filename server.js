@@ -14,9 +14,9 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.0.8", // Am crescut versiunea pentru a curăța cache-ul vechi din player
+    version: "1.0.9", // Versiune nouă pentru a activa filtrul de popularitate
     name: "Cinema Dates Radar",
-    description: "Strict future estimates only. 30 Unique Movies Rule.",
+    description: "Future estimates only. Pop > 50 Filter. 30 Unique Movies.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
@@ -48,7 +48,7 @@ function getEstimatedPeriod(dateObj) {
 function calculateVOD(movie, detailData) {
     let validDates = [];
     const today = new Date();
-    today.setHours(0, 0, 0, 0); // Resetăm orele pentru o comparație perfectă pe zile
+    today.setHours(0, 0, 0, 0); 
 
     if (detailData.release_dates && detailData.release_dates.results) {
         for (const r of detailData.release_dates.results) {
@@ -102,7 +102,6 @@ async function fetchMovies(apiKey) {
 
     try {
         const pagePromises = [];
-        // Am crescut la 6 pagini pentru a avea de unde alege după ce aruncăm filmele expirate
         for (let i = 1; i <= 6; i++) {
             pagePromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
         }
@@ -112,7 +111,11 @@ async function fetchMovies(apiKey) {
         pagesData.forEach(p => { if (p.results) allMovies = allMovies.concat(p.results); });
 
         const allowedLangs = ['en', 'fr', 'de', 'it', 'es', 'nl', 'sv', 'da', 'no', 'fi'];
-        let cleanMovies = allMovies.filter(movie => allowedLangs.includes(movie.original_language));
+        
+        // --- FILTRUL DE POPULARITATE MINIMĂ ---
+        let cleanMovies = allMovies.filter(movie => {
+            return allowedLangs.includes(movie.original_language) && movie.popularity >= 50;
+        });
 
         const todayMidnight = new Date();
         todayMidnight.setHours(0, 0, 0, 0);
@@ -127,8 +130,7 @@ async function fetchMovies(apiKey) {
 
                 const vodInfo = calculateVOD(movie, detailData);
 
-                // --- REGULA CEA NOUĂ: Fără estimări în trecut! ---
-                // Dacă e estimat ȘI data estimată a trecut deja, îl aruncăm.
+                // Dacă e estimat ȘI data estimată a trecut deja, îl aruncăm
                 if (vodInfo.isEstimated && vodInfo.sortDateObj < todayMidnight) {
                     return null;
                 }
