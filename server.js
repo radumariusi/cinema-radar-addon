@@ -14,9 +14,9 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.2.0", // Sistem Hibrid: 30 NP + 10 UP, Sortare Avansată US/RO, Grafică Duală
+    version: "1.2.1", // Sincronizare perfectă: ImageKit fix, Type 3 Cinema strict, 10 Pagini Upcoming
     name: "Cinema Dates Radar",
-    description: "Hybrid NP/UP logic, US/UK/RO/EUR filters, Double ImageKit Layers.",
+    description: "Hybrid NP/UP architecture. Corrected Layer syntax. US/UK/RO/EUR filters.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
@@ -48,7 +48,7 @@ function getEstimatedPeriod(dateObj) {
     return `Late ${month}`;
 }
 
-// Extrage datele de lansare în cinema pentru US și RO
+// Extrage exclusiv data premierei oficiale largi în cinema (Type 3 Theatrical) pentru US și RO
 function getLocalCinemaDates(detailData, fallbackStr) {
     let usDate = null, roDate = null;
     if (detailData.release_dates && detailData.release_dates.results) {
@@ -56,7 +56,8 @@ function getLocalCinemaDates(detailData, fallbackStr) {
             if (r.iso_3166_1 === 'US' || r.iso_3166_1 === 'RO') {
                 let bestDate = null;
                 for (const rel of r.release_dates) {
-                    if (rel.type >= 1 && rel.type <= 3) { 
+                    // Tipul 3 reprezintă lansarea oficială în cinematografe ("Theatrical Wide Release")
+                    if (rel.type === 3) { 
                         const d = new Date(rel.release_date);
                         if (!bestDate || d < bestDate) bestDate = d;
                     }
@@ -135,8 +136,10 @@ async function fetchMovies(apiKey) {
         const sixMonthsAgo = new Date(todayMidnight.getTime() - 180 * 24 * 60 * 60 * 1000);
         const threeMonthsAgo = new Date(todayMidnight.getTime() - 90 * 24 * 60 * 60 * 1000);
 
+        let seenImdbIds = new Set();
+
         // ==========================================
-        // PARTEA 1: MODULUL "NOW PLAYING"
+        // MODULUL 1: "NOW PLAYING" (FILME LANSATE)
         // ==========================================
         const npPromises = [];
         for (let i = 1; i <= 10; i++) npPromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
@@ -144,12 +147,10 @@ async function fetchMovies(apiKey) {
         let npMovies = [];
         npData.forEach(p => { if (p.results) npMovies = npMovies.concat(p.results); });
 
-        // Filtrare de bază și sortare după popularitate
         let npClean = npMovies.filter(m => allowedLangs.includes(m.original_language));
-        npClean.sort((a, b) => b.popularity - a.popularity);
+        npClean.sort((a, b) => b.popularity - a.popularity); // Sortează după popularitate
 
         let top45NP = [];
-        let seenImdbIds = new Set();
 
         for (const movie of npClean) {
             if (top45NP.length === 45) break;
@@ -166,7 +167,7 @@ async function fetchMovies(apiKey) {
 
                 const dates = getLocalCinemaDates(detailData, movie.release_date);
                 
-                // Alegem ultima dată de lansare (cea mai recentă) dintre US și RO
+                // Ultima dată dintre US și RO (cea mai recentă premieră cinema comercială)
                 let cinemaDate = null;
                 if (dates.us && dates.ro) cinemaDate = dates.us > dates.ro ? dates.us : dates.ro;
                 else if (dates.us) cinemaDate = dates.us;
@@ -175,12 +176,12 @@ async function fetchMovies(apiKey) {
                 
                 cinemaDate.setHours(0, 0, 0, 0);
 
-                // Regula: Să fie lansat (<= azi) și nu mai vechi de 6 luni
+                // Regula: Lansat deja (<= azi) și nu mai vechi de 6 luni
                 if (cinemaDate > todayMidnight || cinemaDate < sixMonthsAgo) continue;
 
                 const vodInfo = calculateVOD(movie, detailData);
 
-                // Regula: Eliminăm estimările mai vechi de 3 luni
+                // Regula: Eliminăm estimările mai vechi de 3 luni din trecut
                 if (vodInfo.isEstimated && vodInfo.sortDateObj < threeMonthsAgo) continue;
 
                 seenImdbIds.add(imdbId);
@@ -188,15 +189,17 @@ async function fetchMovies(apiKey) {
             } catch (err) { continue; }
         }
 
-        // Sortăm cele 45 și oprim 30 (Ordinea cerută: descrescător din viitor spre trecut)
+        // Sortare mixtă cerută: descrescător din viitor în trecut pe axa digitală (VOD/EST)
         top45NP.sort((a, b) => b.vodInfo.sortDateObj.getTime() - a.vodInfo.sortDateObj.getTime());
         const finalNowPlaying = top45NP.slice(0, 30);
 
+
         // ==========================================
-        // PARTEA 2: MODULUL "UPCOMING"
+        // MODULUL 2: "UPCOMING" (LANSĂRI VIITOARE IN CINEMA)
         // ==========================================
         const upPromises = [];
-        for (let i = 1; i <= 3; i++) upPromises.push(fetch(`${TMDB_BASE_URL}/movie/upcoming?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
+        // Mărit la 10 pagini ca să fim siguri că avem destul volum brut după filtrele de calitate
+        for (let i = 1; i <= 10; i++) upPromises.push(fetch(`${TMDB_BASE_URL}/movie/upcoming?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
         const upData = await Promise.all(upPromises);
         let upMovies = [];
         upData.forEach(p => { if (p.results) upMovies = upMovies.concat(p.results); });
@@ -217,7 +220,7 @@ async function fetchMovies(apiKey) {
 
                 const dates = getLocalCinemaDates(detailData, movie.release_date);
                 
-                // Căutăm lansarea viitoare cea mai apropiată (Minimul valid dintre US/RO)
+                // Căutăm data viitoare cea mai apropiată din punct de vedere comercial (Minimul valid dintre US și RO)
                 let validFutureDates = [];
                 if (dates.us && dates.us >= todayMidnight) validFutureDates.push(dates.us);
                 if (dates.ro && dates.ro >= todayMidnight) validFutureDates.push(dates.ro);
@@ -226,7 +229,7 @@ async function fetchMovies(apiKey) {
                 if (validFutureDates.length > 0) cinemaDate = new Date(Math.min(...validFutureDates));
                 else if (dates.fallback >= todayMidnight) cinemaDate = dates.fallback;
 
-                if (!cinemaDate) continue; // Dacă n-are nicio dată în viitor, ignorăm
+                if (!cinemaDate) continue; // Nu este lansare viitoare certă comerciaă în regiunile noastre
 
                 const vodInfo = calculateVOD(movie, detailData);
                 
@@ -235,21 +238,24 @@ async function fetchMovies(apiKey) {
             } catch (err) { continue; }
         }
 
-        // Sortăm crescător pentru a lua cele 10 care apar cel mai curând în cinema
+        // Sortăm întâi cronologic crescător ca să extragem cele 10 care bat cel mai curând la ușă în cinema
         upcomingList.sort((a, b) => a.cinemaDate.getTime() - b.cinemaDate.getTime());
         let top10Upcoming = upcomingList.slice(0, 10);
-        // Resubordonăm cele 10 în ordinea dorită la final: descrescător dinspre viitorul îndepărtat
+        
+        // Ordinea finală în catalog: descrescător de la cel mai îndepărtat punct din viitor
         top10Upcoming.sort((a, b) => b.cinemaDate.getTime() - a.cinemaDate.getTime());
 
+
         // ==========================================
-        // PARTEA 3: GENERARE GRAFICĂ IMAGEKIT (DUAL LAYER)
+        // MODULUL 3: COCOȘAREA PARSURILOR IN IMAGEKIT (DUAL LAYERS)
         // ==========================================
         
         const metasNP = finalNowPlaying.map(item => {
             const topText = encodeURIComponent(Buffer.from("In Cinema").toString('base64'));
             const botText = encodeURIComponent(Buffer.from(`${item.vodInfo.typeLabel}: ${item.vodInfo.chosenDateStr}`).toString('base64'));
             
-            const transform = `?tr=l-text,ie-${topText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-top,l-end,l-text,ie-${botText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-bottom,l-end`;
+            // CORECTAT: Folosim caracterul ":" ca separator valid de layere ImageKit în loc de ","
+            const transform = `?tr=l-text,ie-${topText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-top,l-end:l-text,ie-${botText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-bottom,l-end`;
             const posterUrl = `https://ik.imagekit.io/${IMAGEKIT_ID}/tmdb/t/p/w500${item.movie.poster_path}${transform}`;
 
             return {
@@ -263,12 +269,13 @@ async function fetchMovies(apiKey) {
 
         const metasUP = top10Upcoming.map(item => {
             const dateStr = formatDateEU(item.cinemaDate);
-            const topTextRaw = `Upcoming\n${dateStr}`; // \n permite scrierea pe 2 rânduri
+            const topTextRaw = `Upcoming\n${dateStr}`; // Două rânduri sus
             
             const topText = encodeURIComponent(Buffer.from(topTextRaw).toString('base64'));
             const botText = encodeURIComponent(Buffer.from(`${item.vodInfo.typeLabel}: ${item.vodInfo.chosenDateStr}`).toString('base64'));
             
-            const transform = `?tr=l-text,ie-${topText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-top,l-end,l-text,ie-${botText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-bottom,l-end`;
+            // CORECTAT: Separator ":" activ și pentru stratul de Upcoming
+            const transform = `?tr=l-text,ie-${topText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-top,l-end:l-text,ie-${botText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-bottom,l-end`;
             const posterUrl = `https://ik.imagekit.io/${IMAGEKIT_ID}/tmdb/t/p/w500${item.movie.poster_path}${transform}`;
 
             return {
