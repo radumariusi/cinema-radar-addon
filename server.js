@@ -14,9 +14,9 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.0.4", // Versiune nouă pentru a aplica noile reguli grafice și de cache
+    version: "1.0.5", // Am crescut versiunea pentru a curăța cache-ul de titluri de pe mobil
     name: "Cinema Dates Radar",
-    description: "VOD estimates. Font 45, 60% opacity, 12h Cache.",
+    description: "VOD estimates. Clean Titles, Font 45, 60% opacity.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
@@ -85,7 +85,6 @@ function calculateVOD(movie, detailData) {
 }
 
 async function fetchMovies(apiKey) {
-    // Cache intern setat la 12 ore (43200000 milisecunde)
     if (globalCache.movies.length > 0 && (Date.now() - globalCache.lastFetch < 43200000)) {
         return globalCache.movies;
     }
@@ -111,13 +110,11 @@ async function fetchMovies(apiKey) {
 
                 const vodInfo = calculateVOD(movie, detailData);
                 const textToStamp = `${vodInfo.typeLabel}: ${vodInfo.chosenDateStr}`;
-                const displayTitle = `[${textToStamp}] ${movie.title}`;
 
                 // Base64 Text
                 const base64Text = Buffer.from(textToStamp).toString('base64');
                 const encodedText = encodeURIComponent(base64Text);
                 
-                // Setări grafice aplicate: fs-45 (Font 45), bg-00000099 (Negru 60% Opacitate)
                 const imageKitTransform = `?tr=l-text,ie-${encodedText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-bottom,l-end`;
                 const customPosterUrl = `https://ik.imagekit.io/${IMAGEKIT_ID}/tmdb/t/p/w500${movie.poster_path}${imageKitTransform}`;
 
@@ -125,7 +122,7 @@ async function fetchMovies(apiKey) {
                     meta: {
                         id: imdbId,
                         type: "movie",
-                        name: displayTitle,
+                        name: movie.title, // <--- AICI ESTE REZOLVAREA: Livrăm doar titlul curat al filmului
                         poster: customPosterUrl,
                         description: movie.overview
                     },
@@ -164,7 +161,6 @@ async function handleCatalog(req, res) {
 
     if (type === "movie" && id === "cinema_radar") {
         const metas = await fetchMovies(apiKey);
-        // Ordonăm playerului (Nuvio/Stremio) să țină minte catalogul 12 ore (43200 secunde)
         res.setHeader('Cache-Control', 'max-age=43200, public');
         res.json({ metas: metas });
     } else {
