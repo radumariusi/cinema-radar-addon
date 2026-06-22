@@ -112,6 +112,7 @@ function calculateVOD(movie, detailData, cinemaDate, bucket) {
         else if (chosen.type === 6) typeLabel = "TV";
         chosenDateStr = formatDateEU(sortDateObj);
 
+        // FIX 4: data digitala inainte de cinemaDate => cinemaDate = vodDate, re-eval bucket
         if (sortDateObj < cinemaDate) {
             adjustedCinemaDate = new Date(sortDateObj);
             adjustedCinemaDate.setHours(0, 0, 0, 0);
@@ -137,6 +138,7 @@ function calculateVOD(movie, detailData, cinemaDate, bucket) {
 
         sortDateObj = new Date(cinemaDate.getTime() + (daysToAdd * 24 * 60 * 60 * 1000));
 
+        // FIX 3: EST in trecut pentru NP => recalculeaza de la azi
         if (bucket === 'NP' && sortDateObj < today) {
             console.log(`[FIX3] ${movie.title}: EST was in past (${formatDateEU(sortDateObj)}), recalculating from today`);
             sortDateObj = new Date(today.getTime() + (daysToAdd * 24 * 60 * 60 * 1000));
@@ -285,7 +287,7 @@ async function fetchMovies(apiKey) {
 
         let globalSeenIds = new Set();
 
-        // UPCOMING: selectie 10 dupa vodSortDate iminent
+        // --- UPCOMING: selectie 10 dupa vodSortDate iminent ---
         poolUP.sort((a, b) => a.vodInfo.sortDateObj.getTime() - b.vodInfo.sortDateObj.getTime());
         let finalUpcoming = [];
         for (const item of poolUP) {
@@ -297,7 +299,7 @@ async function fetchMovies(apiKey) {
         }
         console.log(`Selected UP (${finalUpcoming.length}): ${finalUpcoming.map(x => x.movie.title).join(', ')}`);
 
-        // NOW PLAYING: selectie 30 dupa popularitate
+        // --- NOW PLAYING: selectie 30 dupa popularitate ---
         let filteredNP = poolNP.filter(item => item.cinemaDate >= nineMonthsAgo);
         filteredNP = filteredNP.filter(item => {
             if (item.vodInfo.isEstimated && item.vodInfo.sortDateObj < threeMonthsAgo) return false;
@@ -315,22 +317,32 @@ async function fetchMovies(apiKey) {
         }
         console.log(`Selected NP (${finalNowPlaying.length}): ${finalNowPlaying.map(x => x.movie.title).join(', ')}`);
 
-        // ASAMBLARE FINALA: tag liste, unire, sortare globala dupa data digitala
+        // --- ASAMBLARE FINALA ---
+        // Fiecare item primeste eticheta corecta bazata pe bucket-ul sau
+        // Apoi lista combinata e sortata GLOBAL dupa vodSortDate descrescator
+        // (cel mai indepartat in viitor = primul, cel mai departe in trecut = ultimul)
+
+        // Adauga tag-ul de lista fiecarui item inainte de unire
         finalUpcoming.forEach(item => { item._listType = 'UP'; });
         finalNowPlaying.forEach(item => { item._listType = 'NP'; });
 
         const combined = [...finalUpcoming, ...finalNowPlaying];
+
+        // Sortare globala descrescatoare dupa data digitala
         combined.sort((a, b) => b.vodInfo.sortDateObj.getTime() - a.vodInfo.sortDateObj.getTime());
 
-        console.log(`Combined & sorted (${combined.length}): ${combined.map(x => `[${x._listType}]${x.movie.title}(${x.vodInfo.typeLabel}:${x.vodInfo.chosenDateStr})`).join(', ')}`);
+        console.log(`Combined & sorted: ${combined.map(x => `[${x._listType}]${x.movie.title}(${x.vodInfo.typeLabel}:${x.vodInfo.chosenDateStr})`).join(', ')}`);
 
+        // Genereaza posterele cu eticheta corecta pt fiecare item
         const finalMetas = combined.map(item => {
             let topTextRaw, botTextRaw;
 
             if (item._listType === 'UP') {
+                // Upcoming: sus = "Upcoming | DD.MM.YYYY" (data cinema), jos = data digitala
                 topTextRaw = `Upcoming | ${formatDateEU(item.cinemaDate)}`;
                 botTextRaw = `${item.vodInfo.typeLabel}: ${item.vodInfo.chosenDateStr}`;
             } else {
+                // Now Playing: sus = "In Cinema", jos = data digitala
                 topTextRaw = `In Cinema`;
                 botTextRaw = `${item.vodInfo.typeLabel}: ${item.vodInfo.chosenDateStr}`;
             }
