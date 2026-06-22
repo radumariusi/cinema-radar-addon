@@ -14,9 +14,9 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.2.2", // Logica Master, Popularitate > 50 Peste Tot, Date Precise RO/US
+    version: "1.2.3", // Master List Bucket, Pop >= 50 strict, Date inteligente Trecut/Viitor
     name: "Cinema Dates Radar",
-    description: "Hybrid NP/UP Filter. Concrete Wall Active. ImageKit Fix.",
+    description: "Master Bucket Hybrid. Pop>50 strict. Perfect UP/NP separation.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
@@ -28,7 +28,6 @@ const globalCache = {
     lastFetch: 0        
 };
 
-// "Zidul de Beton" Geografic
 const allowedLangs = ['en', 'ro', 'fr', 'de', 'it', 'es', 'nl', 'sv', 'da', 'no', 'fi'];
 const allowedCountries = ['US', 'GB', 'RO', 'FR', 'DE', 'IT', 'ES', 'NL', 'SE', 'DK', 'NO', 'FI'];
 
@@ -49,10 +48,12 @@ function getEstimatedPeriod(dateObj) {
     return `Late ${month}`;
 }
 
-// Funcție inteligentă care extrage data pentru US/RO. 
-// wantFuture=true (pentru Upcoming), wantFuture=false (pentru Now Playing)
-function getResolvedCinemaDate(movie, detailData, wantFuture) {
+// Analizează datele și trimite filmul în găleata NP (trecut) sau UP (viitor)
+function resolveBucketAndDates(movie, detailData) {
     let dates = [];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
     if (detailData.release_dates && detailData.release_dates.results) {
         for (const r of detailData.release_dates.results) {
             if (r.iso_3166_1 === 'US' || r.iso_3166_1 === 'RO') {
@@ -64,22 +65,24 @@ function getResolvedCinemaDate(movie, detailData, wantFuture) {
             }
         }
     }
-    const fallback = new Date(movie.release_date);
-    if (!isNaN(fallback.getTime())) dates.push(fallback);
-
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    if (wantFuture) {
-        // Pentru UP: luăm data viitoare cea mai apropiată
-        const futureDates = dates.filter(d => d > today);
-        if (futureDates.length > 0) return new Date(Math.min(...futureDates));
-    } else {
-        // Pentru NP: luăm data trecută cea mai recentă (cea mai apropiată de noi)
-        const pastDates = dates.filter(d => d <= today);
-        if (pastDates.length > 0) return new Date(Math.max(...pastDates));
+    
+    if (dates.length === 0) {
+        const fallback = new Date(movie.release_date);
+        if (!isNaN(fallback.getTime())) dates.push(fallback);
     }
-    return null;
+
+    const pastDates = dates.filter(d => d <= today);
+    const futureDates = dates.filter(d => d > today);
+
+    if (pastDates.length > 0) {
+        const bestPast = new Date(Math.max(...pastDates));
+        return { bucket: 'NP', cinemaDate: bestPast };
+    } else if (futureDates.length > 0) {
+        const bestFuture = new Date(Math.min(...futureDates));
+        return { bucket: 'UP', cinemaDate: bestFuture };
+    }
+    
+    return { bucket: 'NONE', cinemaDate: null };
 }
 
 function calculateVOD(movie, detailData) {
@@ -143,130 +146,117 @@ async function fetchMovies(apiKey) {
         const sixMonthsAgo = new Date(todayMidnight.getTime() - 180 * 24 * 60 * 60 * 1000);
         const threeMonthsAgo = new Date(todayMidnight.getTime() - 90 * 24 * 60 * 60 * 1000);
 
-        let seenImdbIds = new Set();
+        // PASUL 1: MASTER BUCKET
+        const pagePromises = [];
+        for (let i = 1; i <= 10; i++) {
+            pagePromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
+            pagePromises.push(fetch(`${TMDB_BASE_URL}/movie/upcoming?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
+        }
+        
+        const pagesData = await Promise.all(pagePromises);
+        
+        // Deduplicare la nivel de ID TMDB
+        const uniqueMoviesMap = new Map();
+        pagesData.forEach(p => {
+            if (p.results) {
+                p.results.forEach(m => {
+                    if (!uniqueMoviesMap.has(m.id)) uniqueMoviesMap.set(m.id, m);
+                });
+            }
+        });
+        
+        let masterList = Array.from(uniqueMoviesMap.values());
 
-        // ==========================================
-        // MODULUL 1: "NOW PLAYING" (DEJA LANSATE)
-        // ==========================================
-        const npPromises = [];
-        for (let i = 1; i <= 10; i++) npPromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
-        const npData = await Promise.all(npPromises);
-        let npMovies = [];
-        npData.forEach(p => { if (p.results) npMovies = npMovies.concat(p.results); });
+        // PASUL 2: ZIDUL DE BETON (Popularitate și Limbă)
+        masterList = masterList.filter(m => m.popularity >= 50 && allowedLangs.includes(m.original_language));
 
-        // Filtrul de Bază (Limbă + Popularitate Strict >= 50)
-        let npClean = npMovies.filter(m => m.popularity >= 50 && allowedLangs.includes(m.original_language));
-        npClean.sort((a, b) => b.popularity - a.popularity); // Sortăm după popularitate ca să le luăm pe cele mai mari
+        let poolNP = [];
+        let poolUP = [];
 
-        let top45NP = [];
+        // PASUL 3: EXTRAGEREA ÎN BATCH-URI (Ca să nu supărăm serverul TMDB)
+        const chunkSize = 20;
+        for (let i = 0; i < masterList.length; i += chunkSize) {
+            const chunk = masterList.slice(i, i + chunkSize);
+            
+            const chunkPromises = chunk.map(async movie => {
+                try {
+                    const detailRes = await fetch(`${TMDB_BASE_URL}/movie/${movie.id}?api_key=${apiKey}&append_to_response=release_dates,external_ids`);
+                    const detailData = await detailRes.json();
+                    
+                    const imdbId = detailData.external_ids ? detailData.external_ids.imdb_id : null;
+                    if (!imdbId) return null;
 
-        for (const movie of npClean) {
-            if (top45NP.length === 45) break;
+                    // Filtru Țară de Origine
+                    let isAllowedOrigin = false;
+                    const origins = detailData.origin_country || [];
+                    if (origins.length > 0) {
+                        isAllowedOrigin = origins.some(c => allowedCountries.includes(c));
+                    } else {
+                        const prods = detailData.production_countries || [];
+                        isAllowedOrigin = prods.some(c => allowedCountries.includes(c.iso_3166_1));
+                    }
+                    if (!isAllowedOrigin) return null;
 
-            try {
-                const detailRes = await fetch(`${TMDB_BASE_URL}/movie/${movie.id}?api_key=${apiKey}&append_to_response=release_dates,external_ids`);
-                const detailData = await detailRes.json();
-                
-                const imdbId = detailData.external_ids ? detailData.external_ids.imdb_id : null;
-                if (!imdbId || seenImdbIds.has(imdbId)) continue;
+                    // Decizia: Trecut (NP) sau Viitor (UP)?
+                    const { bucket, cinemaDate } = resolveBucketAndDates(movie, detailData);
+                    if (!bucket || bucket === 'NONE') return null;
 
-                // Verificare Țară Origine Strictă
-                let isAllowedOrigin = false;
-                const origins = detailData.origin_country || [];
-                if (origins.length > 0) {
-                    isAllowedOrigin = origins.some(c => allowedCountries.includes(c));
-                } else {
-                    const prods = detailData.production_countries || [];
-                    isAllowedOrigin = prods.some(c => allowedCountries.includes(c.iso_3166_1));
+                    const vodInfo = calculateVOD(movie, detailData);
+
+                    return { bucket, movie, detailData, imdbId, vodInfo, cinemaDate };
+                } catch (err) { return null; }
+            });
+
+            const results = await Promise.all(chunkPromises);
+            results.forEach(res => {
+                if (res) {
+                    if (res.bucket === 'NP') poolNP.push(res);
+                    if (res.bucket === 'UP') poolUP.push(res);
                 }
-                if (!isAllowedOrigin) continue;
-
-                // Data de lansare în cinema (trecută)
-                const cinemaDate = getResolvedCinemaDate(movie, detailData, false);
-                if (!cinemaDate) continue;
-
-                cinemaDate.setHours(0, 0, 0, 0);
-
-                // Nu mai vechi de 6 luni
-                if (cinemaDate < sixMonthsAgo) continue;
-
-                const vodInfo = calculateVOD(movie, detailData);
-
-                // Eliminăm estimările de VOD mai vechi de 3 luni
-                if (vodInfo.isEstimated && vodInfo.sortDateObj < threeMonthsAgo) continue;
-
-                seenImdbIds.add(imdbId);
-                top45NP.push({ movie, detailData, imdbId, vodInfo });
-            } catch (err) { continue; }
+            });
         }
 
-        // Tăiem la 30 și le sortăm descrescător din viitor în trecut
-        top45NP.sort((a, b) => b.vodInfo.sortDateObj.getTime() - a.vodInfo.sortDateObj.getTime());
-        const finalNowPlaying = top45NP.slice(0, 30);
-
-
-        // ==========================================
-        // MODULUL 2: "UPCOMING" (LANSĂRI VIITOARE IN CINEMA)
-        // ==========================================
-        const upPromises = [];
-        for (let i = 1; i <= 10; i++) upPromises.push(fetch(`${TMDB_BASE_URL}/movie/upcoming?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
-        const upData = await Promise.all(upPromises);
-        let upMovies = [];
-        upData.forEach(p => { if (p.results) upMovies = upMovies.concat(p.results); });
-
-        // Filtrul de Bază (Limbă + Popularitate Strict >= 50)
-        let upClean = upMovies.filter(m => m.popularity >= 50 && allowedLangs.includes(m.original_language));
+        // PASUL 4: PROCESARE NOW PLAYING (NP)
+        poolNP = poolNP.filter(item => item.cinemaDate >= sixMonthsAgo);
+        poolNP.sort((a, b) => b.movie.popularity - a.movie.popularity);
         
-        // Pentru a prinde cele mai apropiate de lansare, sortăm cronologic crescător după data generică TMDB
-        upClean.sort((a, b) => new Date(a.release_date).getTime() - new Date(b.release_date).getTime());
+        let top45NP = poolNP.slice(0, 45);
+        let validNP = [];
+        let globalSeenIds = new Set(); // Pentru a nu duplica filme între NP și UP
 
-        let top10UP = [];
+        for (const item of top45NP) {
+            if (item.vodInfo.isEstimated && item.vodInfo.sortDateObj < threeMonthsAgo) continue;
+            if (!globalSeenIds.has(item.imdbId)) {
+                globalSeenIds.add(item.imdbId);
+                validNP.push(item);
+            }
+        }
+        
+        let finalNowPlaying = validNP.slice(0, 30);
+        finalNowPlaying.sort((a, b) => b.vodInfo.sortDateObj.getTime() - a.vodInfo.sortDateObj.getTime());
 
-        for (const movie of upClean) {
-            if (top10UP.length === 10) break;
-
-            try {
-                const detailRes = await fetch(`${TMDB_BASE_URL}/movie/${movie.id}?api_key=${apiKey}&append_to_response=release_dates,external_ids`);
-                const detailData = await detailRes.json();
-                
-                const imdbId = detailData.external_ids ? detailData.external_ids.imdb_id : null;
-                if (!imdbId || seenImdbIds.has(imdbId)) continue; 
-
-                // Verificare Țară Origine Strictă
-                let isAllowedOrigin = false;
-                const origins = detailData.origin_country || [];
-                if (origins.length > 0) {
-                    isAllowedOrigin = origins.some(c => allowedCountries.includes(c));
-                } else {
-                    const prods = detailData.production_countries || [];
-                    isAllowedOrigin = prods.some(c => allowedCountries.includes(c.iso_3166_1));
-                }
-                if (!isAllowedOrigin) continue;
-
-                // Data de lansare în cinema (viitoare)
-                const cinemaDate = getResolvedCinemaDate(movie, detailData, true);
-                if (!cinemaDate) continue;
-
-                const vodInfo = calculateVOD(movie, detailData);
-                
-                seenImdbIds.add(imdbId);
-                top10UP.push({ movie, detailData, imdbId, vodInfo, cinemaDate });
-            } catch (err) { continue; }
+        // PASUL 5: PROCESARE UPCOMING (UP)
+        // Sortăm crescător ca să luăm primele care bat la ușă
+        poolUP.sort((a, b) => a.cinemaDate.getTime() - b.cinemaDate.getTime());
+        
+        let validUP = [];
+        for (const item of poolUP) {
+            if (!globalSeenIds.has(item.imdbId)) {
+                globalSeenIds.add(item.imdbId);
+                validUP.push(item);
+            }
+            if (validUP.length === 10) break;
         }
 
-        // Sortăm Upcoming descrescător după data premierei (de la cel mai îndepărtat viitor spre prezent)
-        top10UP.sort((a, b) => b.cinemaDate.getTime() - a.cinemaDate.getTime());
+        // Sortăm descrescător pentru grila Nuvio
+        validUP.sort((a, b) => b.cinemaDate.getTime() - a.cinemaDate.getTime());
 
 
-        // ==========================================
-        // MODULUL 3: GENERARE GRAFICĂ IMAGEKIT
-        // ==========================================
-        
+        // PASUL 6: GRAFICĂ IMAGEKIT DUALĂ
         const metasNP = finalNowPlaying.map(item => {
             const topText = encodeURIComponent(Buffer.from("In Cinema").toString('base64'));
             const botText = encodeURIComponent(Buffer.from(`${item.vodInfo.typeLabel}: ${item.vodInfo.chosenDateStr}`).toString('base64'));
             
-            // Folosim ":" pentru suprapuneri multiple corecte
             const transform = `?tr=l-text,ie-${topText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-top,l-end:l-text,ie-${botText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-bottom,l-end`;
             const posterUrl = `https://ik.imagekit.io/${IMAGEKIT_ID}/tmdb/t/p/w500${item.movie.poster_path}${transform}`;
 
@@ -279,9 +269,9 @@ async function fetchMovies(apiKey) {
             };
         });
 
-        const metasUP = top10UP.map(item => {
+        const metasUP = validUP.map(item => {
             const dateStr = formatDateEU(item.cinemaDate);
-            const topTextRaw = `Upcoming\n${dateStr}`; 
+            const topTextRaw = `Upcoming\n${dateStr}`;
             
             const topText = encodeURIComponent(Buffer.from(topTextRaw).toString('base64'));
             const botText = encodeURIComponent(Buffer.from(`${item.vodInfo.typeLabel}: ${item.vodInfo.chosenDateStr}`).toString('base64'));
