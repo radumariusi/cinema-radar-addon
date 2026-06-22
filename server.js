@@ -14,16 +14,16 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.0.3", // Versiune nouă pentru a forța Nuvio/Stremio să șteargă cache-ul vechi
+    version: "1.0.4", // Versiune nouă pentru a aplica noile reguli grafice și de cache
     name: "Cinema Dates Radar",
-    description: "VOD estimates via ImageKit URL Transformations.",
+    description: "VOD estimates. Font 45, 60% opacity, 12h Cache.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
     idPrefixes: ["tt"]
 };
 
-// Seiful de memorie (Doar pentru lista de text, nu mai ținem poze în RAM)
+// Seiful intern de memorie (Koyeb RAM Cache)
 const globalCache = {
     movies: [],          
     lastFetch: 0        
@@ -85,8 +85,8 @@ function calculateVOD(movie, detailData) {
 }
 
 async function fetchMovies(apiKey) {
-    // Cache mapat pe 1 oră pentru lista de filme
-    if (globalCache.movies.length > 0 && (Date.now() - globalCache.lastFetch < 3600000)) {
+    // Cache intern setat la 12 ore (43200000 milisecunde)
+    if (globalCache.movies.length > 0 && (Date.now() - globalCache.lastFetch < 43200000)) {
         return globalCache.movies;
     }
 
@@ -113,12 +113,12 @@ async function fetchMovies(apiKey) {
                 const textToStamp = `${vodInfo.typeLabel}: ${vodInfo.chosenDateStr}`;
                 const displayTitle = `[${textToStamp}] ${movie.title}`;
 
-                // Conversie text în Base64 pentru a securiza caracterele speciale (cum ar fi ":")
+                // Base64 Text
                 const base64Text = Buffer.from(textToStamp).toString('base64');
                 const encodedText = encodeURIComponent(base64Text);
                 
-                // Construirea URL-ului prin noul endpoint `/tmdb/` și parametrii optimizați (fs-40 = dimensiune perfectă pentru w500)
-                const imageKitTransform = `?tr=l-text,ie-${encodedText},fs-40,co-FFFFFF,bg-000000CC,w-500,pa-15,lfo-bottom,l-end`;
+                // Setări grafice aplicate: fs-45 (Font 45), bg-00000099 (Negru 60% Opacitate)
+                const imageKitTransform = `?tr=l-text,ie-${encodedText},fs-45,co-FFFFFF,bg-00000099,w-500,pa-15,lfo-bottom,l-end`;
                 const customPosterUrl = `https://ik.imagekit.io/${IMAGEKIT_ID}/tmdb/t/p/w500${movie.poster_path}${imageKitTransform}`;
 
                 return {
@@ -164,6 +164,8 @@ async function handleCatalog(req, res) {
 
     if (type === "movie" && id === "cinema_radar") {
         const metas = await fetchMovies(apiKey);
+        // Ordonăm playerului (Nuvio/Stremio) să țină minte catalogul 12 ore (43200 secunde)
+        res.setHeader('Cache-Control', 'max-age=43200, public');
         res.json({ metas: metas });
     } else {
         res.json({ metas: [] });
