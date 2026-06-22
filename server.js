@@ -14,9 +14,9 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.0.7", // Versiune nouă pentru a forța Nuvio să preia lista completă de 30
+    version: "1.0.8", // Am crescut versiunea pentru a curăța cache-ul vechi din player
     name: "Cinema Dates Radar",
-    description: "VOD estimates with periods. Strict 30 Unique Movies Rule.",
+    description: "Strict future estimates only. 30 Unique Movies Rule.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
@@ -28,7 +28,6 @@ const globalCache = {
     lastFetch: 0        
 };
 
-// Format european (pentru date confirmate)
 function formatDateEU(dateObj) {
     const d = String(dateObj.getDate()).padStart(2, '0');
     const m = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -36,7 +35,6 @@ function formatDateEU(dateObj) {
     return `${d}.${m}.${y}`;
 }
 
-// Format perioadă (pentru estimări)
 function getEstimatedPeriod(dateObj) {
     const day = dateObj.getDate();
     const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -50,6 +48,7 @@ function getEstimatedPeriod(dateObj) {
 function calculateVOD(movie, detailData) {
     let validDates = [];
     const today = new Date();
+    today.setHours(0, 0, 0, 0); // Resetăm orele pentru o comparație perfectă pe zile
 
     if (detailData.release_dates && detailData.release_dates.results) {
         for (const r of detailData.release_dates.results) {
@@ -97,22 +96,26 @@ function calculateVOD(movie, detailData) {
 }
 
 async function fetchMovies(apiKey) {
-    // Memorie cache internă mapată pe 12 ore
     if (globalCache.movies.length > 0 && (Date.now() - globalCache.lastFetch < 43200000)) {
         return globalCache.movies;
     }
 
     try {
         const pagePromises = [];
-        for (let i = 1; i <= 5; i++) pagePromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
+        // Am crescut la 6 pagini pentru a avea de unde alege după ce aruncăm filmele expirate
+        for (let i = 1; i <= 6; i++) {
+            pagePromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
+        }
         
         const pagesData = await Promise.all(pagePromises);
         let allMovies = [];
         pagesData.forEach(p => { if (p.results) allMovies = allMovies.concat(p.results); });
 
         const allowedLangs = ['en', 'fr', 'de', 'it', 'es', 'nl', 'sv', 'da', 'no', 'fi'];
-        // Nu mai limităm aici la 45, lăsăm tot lotul disponibil pentru filtrare
         let cleanMovies = allMovies.filter(movie => allowedLangs.includes(movie.original_language));
+
+        const todayMidnight = new Date();
+        todayMidnight.setHours(0, 0, 0, 0);
 
         const promises = cleanMovies.map(async (movie) => {
             try {
@@ -123,8 +126,14 @@ async function fetchMovies(apiKey) {
                 if (!imdbId) return null;
 
                 const vodInfo = calculateVOD(movie, detailData);
-                const textToStamp = `${vodInfo.typeLabel}: ${vodInfo.chosenDateStr}`;
 
+                // --- REGULA CEA NOUĂ: Fără estimări în trecut! ---
+                // Dacă e estimat ȘI data estimată a trecut deja, îl aruncăm.
+                if (vodInfo.isEstimated && vodInfo.sortDateObj < todayMidnight) {
+                    return null;
+                }
+
+                const textToStamp = `${vodInfo.typeLabel}: ${vodInfo.chosenDateStr}`;
                 const base64Text = Buffer.from(textToStamp).toString('base64');
                 const encodedText = encodeURIComponent(base64Text);
                 
@@ -147,7 +156,6 @@ async function fetchMovies(apiKey) {
 
         let processedMovies = (await Promise.all(promises)).filter(m => m !== null);
         
-        // --- FILTRU STRICT DE DEDUPLICARE DUPĂ IMDB ID ---
         const seenImdbIds = new Set();
         let uniqueMovies = [];
         for (const m of processedMovies) {
@@ -157,14 +165,12 @@ async function fetchMovies(apiKey) {
             }
         }
 
-        // Sortarea listei unice conform regulilor stabilite
         uniqueMovies.sort((a, b) => {
             if (a.isEstimated && !b.isEstimated) return -1;
             if (!a.isEstimated && b.isEstimated) return 1;
             return b.sortDate.getTime() - a.sortDate.getTime();
         });
 
-        // Tăiem la exact 30 de elemente unice abia la finalul tuturor filtrărilor
         const finalMetas = uniqueMovies.slice(0, 30).map(item => item.meta);
 
         globalCache.movies = finalMetas;
@@ -200,4 +206,3 @@ const port = process.env.PORT || 8000;
 app.listen(port, () => {
     console.log(`Server pornit pe portul ${port}`);
 });
-                             
