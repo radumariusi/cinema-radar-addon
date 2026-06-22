@@ -14,9 +14,9 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.1.0", // Versiune nouă pentru schimbarile majore de filtrare (9 luni & US/UK)
+    version: "1.1.1", // Versiune nouă pentru filtrare geografică strictă și pre-sortare cronologică
     name: "Cinema Dates Radar",
-    description: "Future estimates. Max 9 Months Old. US/UK Only for English. Pop > 50.",
+    description: "Newest First, US/UK Strict Origin, Max 9 Months, Pop > 50.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
@@ -102,7 +102,8 @@ async function fetchMovies(apiKey) {
 
     try {
         const pagePromises = [];
-        for (let i = 1; i <= 6; i++) {
+        // Tragem 10 pagini simultan (~200 filme) ca să avem de unde selecta cele mai noi 30
+        for (let i = 1; i <= 10; i++) {
             pagePromises.push(fetch(`${TMDB_BASE_URL}/movie/now_playing?api_key=${apiKey}&language=en-US&page=${i}`).then(r => r.json()));
         }
         
@@ -115,17 +116,33 @@ async function fetchMovies(apiKey) {
         const todayMidnight = new Date();
         todayMidnight.setHours(0, 0, 0, 0);
 
-        // --- FILTRUL 1: POPULARITATE ȘI TIMP (MAXIMUM 9 LUNI VECHIME) ---
         const nineMonthsInMs = 270 * 24 * 60 * 60 * 1000;
         const maxOldDate = new Date(todayMidnight.getTime() - nineMonthsInMs);
 
+        // --- FILTRAREA BRUTĂ (Vechime, Popularitate, Origine) ---
         let cleanMovies = allMovies.filter(movie => {
             const releaseDate = new Date(movie.release_date);
             const isLanguageAllowed = allowedLangs.includes(movie.original_language);
             const isPopularityAllowed = movie.popularity >= 50;
             const isNotTooOld = !isNaN(releaseDate.getTime()) && releaseDate >= maxOldDate;
 
-            return isLanguageAllowed && isPopularityAllowed && isNotTooOld;
+            if (!isLanguageAllowed || !isPopularityAllowed || !isNotTooOld) return false;
+
+            // Filtrul Geografic Strict pentru Engleză
+            if (movie.original_language === 'en') {
+                const originCountries = movie.origin_country || [];
+                const isUSorUK = originCountries.includes('US') || originCountries.includes('GB');
+                if (!isUSorUK) return false;
+            }
+
+            return true;
+        });
+
+        // --- PRE-SORTARE: Cele mai proaspete lansări din cinema primele ---
+        cleanMovies.sort((a, b) => {
+            const dateA = new Date(a.release_date).getTime();
+            const dateB = new Date(b.release_date).getTime();
+            return dateB - dateA; // Ordine descrescătoare
         });
 
         const promises = cleanMovies.map(async (movie) => {
@@ -136,16 +153,9 @@ async function fetchMovies(apiKey) {
                 const imdbId = detailData.external_ids ? detailData.external_ids.imdb_id : null;
                 if (!imdbId) return null;
 
-                // --- FILTRUL 2: DOAR USA ȘI UK PENTRU FILMELE ÎN ENGLEZĂ ---
-                if (movie.original_language === 'en') {
-                    const prodCountries = detailData.production_countries || [];
-                    const isUSorUK = prodCountries.some(c => c.iso_3166_1 === 'US' || c.iso_3166_1 === 'GB');
-                    if (!isUSorUK) return null; // Elimină Australia, Noua Zeelandă, Canada etc.
-                }
-
                 const vodInfo = calculateVOD(movie, detailData);
 
-                // Fără estimări în trecut
+                // Aruncăm estimările care au expirat
                 if (vodInfo.isEstimated && vodInfo.sortDateObj < todayMidnight) {
                     return null;
                 }
@@ -171,24 +181,30 @@ async function fetchMovies(apiKey) {
             } catch (err) { return null; }
         });
 
+        // Promise.all păstrează ordinea exactă a array-ului 'cleanMovies' (cele mai noi primele)
         let processedMovies = (await Promise.all(promises)).filter(m => m !== null);
         
+        // --- COLECTAREA CELOR 30 (Cele mai noi 30 de filme valide) ---
         const seenImdbIds = new Set();
-        let uniqueMovies = [];
+        let uniqueNewestMovies = [];
+        
         for (const m of processedMovies) {
             if (!seenImdbIds.has(m.meta.id)) {
                 seenImdbIds.add(m.meta.id);
-                uniqueMovies.push(m);
+                uniqueNewestMovies.push(m);
+                // Ne oprim din adăugat imediat ce am strâns 30 de lansări valide
+                if (uniqueNewestMovies.length === 30) break;
             }
         }
 
-        uniqueMovies.sort((a, b) => {
+        // --- SORTAREA FINALĂ PENTRU AFIȘARE (Estimat sus, Confirmate jos) ---
+        uniqueNewestMovies.sort((a, b) => {
             if (a.isEstimated && !b.isEstimated) return -1;
             if (!a.isEstimated && b.isEstimated) return 1;
             return b.sortDate.getTime() - a.sortDate.getTime();
         });
 
-        const finalMetas = uniqueMovies.slice(0, 30).map(item => item.meta);
+        const finalMetas = uniqueNewestMovies.map(item => item.meta);
 
         globalCache.movies = finalMetas;
         globalCache.lastFetch = Date.now();
