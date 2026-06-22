@@ -14,22 +14,21 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.0.5", // Am crescut versiunea pentru a curăța cache-ul de titluri de pe mobil
+    version: "1.0.6", // Am crescut versiunea pt a șterge cache-ul
     name: "Cinema Dates Radar",
-    description: "VOD estimates. Clean Titles, Font 45, 60% opacity.",
+    description: "VOD estimates with periods. Reserve Bank active.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
     idPrefixes: ["tt"]
 };
 
-// Seiful intern de memorie (Koyeb RAM Cache)
 const globalCache = {
     movies: [],          
     lastFetch: 0        
 };
 
-// Format european: ZZ.LL.AAAA
+// 1. Format european (pentru date confirmate)
 function formatDateEU(dateObj) {
     const d = String(dateObj.getDate()).padStart(2, '0');
     const m = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -37,7 +36,17 @@ function formatDateEU(dateObj) {
     return `${d}.${m}.${y}`;
 }
 
-// Algoritmul de predicție
+// 2. Format perioadă (pentru estimări)
+function getEstimatedPeriod(dateObj) {
+    const day = dateObj.getDate();
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const month = monthNames[dateObj.getMonth()];
+    
+    if (day <= 10) return `Early ${month}`;
+    if (day <= 20) return `Mid ${month}`;
+    return `Late ${month}`;
+}
+
 function calculateVOD(movie, detailData) {
     let validDates = [];
     const today = new Date();
@@ -53,15 +62,19 @@ function calculateVOD(movie, detailData) {
         }
     }
 
-    let typeLabel = "", sortDateObj = null, isEstimated = false;
+    let typeLabel = "", sortDateObj = null, isEstimated = false, chosenDateStr = "";
 
     if (validDates.length > 0) {
+        // Avem dată confirmată
         validDates.sort((a, b) => Math.abs(a.date - today) - Math.abs(b.date - today));
         sortDateObj = validDates[0].date;
         if (validDates[0].type === 4) typeLabel = "VOD";
         else if (validDates[0].type === 5) typeLabel = "BluRay";
         else if (validDates[0].type === 6) typeLabel = "TV";
+        
+        chosenDateStr = formatDateEU(sortDateObj); // ZZ.LL.AAAA
     } else {
+        // Este estimare
         isEstimated = true;
         typeLabel = "EST";
         let cinemaDate = new Date(movie.release_date);
@@ -78,9 +91,10 @@ function calculateVOD(movie, detailData) {
             else daysToAdd = 38;
         }
         sortDateObj = new Date(cinemaDate.getTime() + (daysToAdd * 24 * 60 * 60 * 1000));
+        
+        chosenDateStr = getEstimatedPeriod(sortDateObj); // Early/Mid/Late Luna
     }
     
-    const chosenDateStr = formatDateEU(sortDateObj);
     return { typeLabel, chosenDateStr, isEstimated, sortDateObj };
 }
 
@@ -98,7 +112,8 @@ async function fetchMovies(apiKey) {
         pagesData.forEach(p => { if (p.results) allMovies = allMovies.concat(p.results); });
 
         const allowedLangs = ['en', 'fr', 'de', 'it', 'es', 'nl', 'sv', 'da', 'no', 'fi'];
-        let cleanMovies = allMovies.filter(movie => allowedLangs.includes(movie.original_language)).slice(0, 30);
+        // TĂIEM LA 45 PENTRU A AVEA REZERVE
+        let cleanMovies = allMovies.filter(movie => allowedLangs.includes(movie.original_language)).slice(0, 45);
 
         const promises = cleanMovies.map(async (movie) => {
             try {
@@ -111,7 +126,6 @@ async function fetchMovies(apiKey) {
                 const vodInfo = calculateVOD(movie, detailData);
                 const textToStamp = `${vodInfo.typeLabel}: ${vodInfo.chosenDateStr}`;
 
-                // Base64 Text
                 const base64Text = Buffer.from(textToStamp).toString('base64');
                 const encodedText = encodeURIComponent(base64Text);
                 
@@ -122,7 +136,7 @@ async function fetchMovies(apiKey) {
                     meta: {
                         id: imdbId,
                         type: "movie",
-                        name: movie.title, // <--- AICI ESTE REZOLVAREA: Livrăm doar titlul curat al filmului
+                        name: movie.title,
                         poster: customPosterUrl,
                         description: movie.overview
                     },
@@ -133,13 +147,16 @@ async function fetchMovies(apiKey) {
         });
 
         let processedMovies = (await Promise.all(promises)).filter(m => m !== null);
+        
+        // SORTAREA EXACTA AȘA CUM AI CERUT
         processedMovies.sort((a, b) => {
             if (a.isEstimated && !b.isEstimated) return -1;
             if (!a.isEstimated && b.isEstimated) return 1;
             return b.sortDate.getTime() - a.sortDate.getTime();
         });
 
-        const finalMetas = processedMovies.map(item => item.meta);
+        // TĂIEM LA FIX 30 ABIA DUPĂ CE AM CURĂȚAT ȘI SORTAT
+        const finalMetas = processedMovies.slice(0, 30).map(item => item.meta);
 
         globalCache.movies = finalMetas;
         globalCache.lastFetch = Date.now();
@@ -150,7 +167,6 @@ async function fetchMovies(apiKey) {
     }
 }
 
-// Rutări
 app.get("/", (req, res) => { res.sendFile(path.join(__dirname, "index.html")); });
 app.get("/:apiKey/manifest.json", (req, res) => { res.json(manifest); });
 
