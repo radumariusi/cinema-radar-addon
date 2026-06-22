@@ -1,13 +1,12 @@
 {
   "name": "cinema-radar",
   "version": "1.0.0",
-  "description": "Cinema VOD Radar",
+  "description": "Cinema VOD Radar cu ImageKit CDN",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "jimp": "^0.22.10"
+    "express": "^4.18.2"
   }
 }
