@@ -14,9 +14,9 @@ const IMAGEKIT_ID = "cinemaradar";
 
 const manifest = {
     id: "ro.radar.cinemadates",
-    version: "1.0.9", // Versiune nouă pentru a activa filtrul de popularitate
+    version: "1.1.0", // Versiune nouă pentru schimbarile majore de filtrare (9 luni & US/UK)
     name: "Cinema Dates Radar",
-    description: "Future estimates only. Pop > 50 Filter. 30 Unique Movies.",
+    description: "Future estimates. Max 9 Months Old. US/UK Only for English. Pop > 50.",
     resources: ["catalog"],
     types: ["movie"],
     catalogs: [{ type: "movie", id: "cinema_radar", name: "Cinema & VOD Releases" }],
@@ -112,13 +112,21 @@ async function fetchMovies(apiKey) {
 
         const allowedLangs = ['en', 'fr', 'de', 'it', 'es', 'nl', 'sv', 'da', 'no', 'fi'];
         
-        // --- FILTRUL DE POPULARITATE MINIMĂ ---
-        let cleanMovies = allMovies.filter(movie => {
-            return allowedLangs.includes(movie.original_language) && movie.popularity >= 50;
-        });
-
         const todayMidnight = new Date();
         todayMidnight.setHours(0, 0, 0, 0);
+
+        // --- FILTRUL 1: POPULARITATE ȘI TIMP (MAXIMUM 9 LUNI VECHIME) ---
+        const nineMonthsInMs = 270 * 24 * 60 * 60 * 1000;
+        const maxOldDate = new Date(todayMidnight.getTime() - nineMonthsInMs);
+
+        let cleanMovies = allMovies.filter(movie => {
+            const releaseDate = new Date(movie.release_date);
+            const isLanguageAllowed = allowedLangs.includes(movie.original_language);
+            const isPopularityAllowed = movie.popularity >= 50;
+            const isNotTooOld = !isNaN(releaseDate.getTime()) && releaseDate >= maxOldDate;
+
+            return isLanguageAllowed && isPopularityAllowed && isNotTooOld;
+        });
 
         const promises = cleanMovies.map(async (movie) => {
             try {
@@ -128,9 +136,16 @@ async function fetchMovies(apiKey) {
                 const imdbId = detailData.external_ids ? detailData.external_ids.imdb_id : null;
                 if (!imdbId) return null;
 
+                // --- FILTRUL 2: DOAR USA ȘI UK PENTRU FILMELE ÎN ENGLEZĂ ---
+                if (movie.original_language === 'en') {
+                    const prodCountries = detailData.production_countries || [];
+                    const isUSorUK = prodCountries.some(c => c.iso_3166_1 === 'US' || c.iso_3166_1 === 'GB');
+                    if (!isUSorUK) return null; // Elimină Australia, Noua Zeelandă, Canada etc.
+                }
+
                 const vodInfo = calculateVOD(movie, detailData);
 
-                // Dacă e estimat ȘI data estimată a trecut deja, îl aruncăm
+                // Fără estimări în trecut
                 if (vodInfo.isEstimated && vodInfo.sortDateObj < todayMidnight) {
                     return null;
                 }
